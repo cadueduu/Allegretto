@@ -1,0 +1,33 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <!-- Fundo arredondado com gradiente -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2A1A0F"/>
+      <stop offset="100%" stop-color="#120A06"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#bg)"/>
+  <rect x="2.5" y="2.5" width="59" height="59" rx="13.5" fill="none" stroke="#D97B2A" stroke-width="0.6" opacity="0.5"/>
+
+  <!-- Corpo do piano (teclas brancas) -->
+  <rect x="10" y="34" width="44" height="20" rx="3" fill="#F0E6D6"/>
+
+  <!-- Divisórias das teclas brancas -->
+  <line x1="19.6" y1="34" x2="19.6" y2="54" stroke="#C9B79C" stroke-width="1"/>
+  <line x1="29.2" y1="34" x2="29.2" y2="54" stroke="#C9B79C" stroke-width="1"/>
+  <line x1="38.8" y1="34" x2="38.8" y2="54" stroke="#C9B79C" stroke-width="1"/>
+  <line x1="44.4" y1="34" x2="44.4" y2="54" stroke="#C9B79C" stroke-width="1"/>
+
+  <!-- Teclas pretas -->
+  <rect x="15.5" y="34" width="6" height="12" rx="1.5" fill="#1A0F08"/>
+  <rect x="25" y="34" width="6" height="12" rx="1.5" fill="#1A0F08"/>
+  <rect x="40" y="34" width="6" height="12" rx="1.5" fill="#1A0F08"/>
+
+  <!-- Nota musical flutuando acima, remetendo a "Allegretto" -->
+  <g transform="translate(36,10)">
+    <circle cx="0" cy="14" r="4.2" fill="#E8983A"/>
+    <rect x="3.6" y="-4" width="2.2" height="18" rx="1.1" fill="#E8983A"/>
+    <path d="M3.6 -4 C 9 -3 9 4 3.6 5 Z" fill="#E8983A"/>
+  </g>
+</svg>
