@@ -1,0 +1,53 @@
+<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Verificação de áudio</title>
+<body style="background:#10151a;color:#d9eced;font:15px monospace;padding:32px"><h1>Verificação de áudio offline</h1><pre id="results">Renderizando os timbres, sem reprodução nos alto-falantes…</pre>
+<script type="module">
+import * as Tone from 'tone';
+import { createAudioEngine } from '/src/audioEngine.js';
+const results = [];
+function metrics(samples, begin=0, end=1) {
+  let peak=0, energy=0;
+  const first=Math.floor(samples.length*begin), last=Math.floor(samples.length*end);
+  for(let i=first;i<last;i++){peak=Math.max(peak,Math.abs(samples[i]));energy+=samples[i]**2;}
+  return {peak,rms:Math.sqrt(energy/(last-first))};
+}
+async function render(options={}, notes=['C4','E4','G4'], velocity=.8, configure) {
+  let engine;
+  const buffer=await Tone.Offline(async context=>{
+    engine=createAudioEngine(options);
+    await engine.ready;
+    if(configure) configure(engine, context);
+    else for(const note of notes) engine.synth.triggerAttackRelease(note,.5,.03,velocity);
+  },1.2,1,44100);
+  const samples=buffer.getChannelData(0).slice();
+  engine.dispose();buffer.dispose();
+  return samples;
+}
+function check(name, passed, details){results.push({name,passed,...details});document.querySelector('#results').textContent=JSON.stringify(results,null,2);}
+try {
+  for(const instrument of ['piano','epiano','organ','strings','flute','bells']) {
+    const values=metrics(await render({instrument}));
+    check(`Timbre ${instrument}`,Number.isFinite(values.rms)&&values.rms>.002&&values.peak<1,values);
+  }
+  const dense=metrics(await render({volume:1,reverb:1},[],1,(engine)=>{
+    for(let midi=60;midi<=84;midi++)engine.synth.triggerAttackRelease(Tone.Frequency(midi,'midi').toNote(),.6,.03,1);
+    for(let i=0;i<3;i++){const remote=engine.createRemoteVoice();for(const note of ['C4','E4','G4','C5'])remote.triggerAttack(note);}
+  }));
+  check('25 notas + 3 músicos remotos sem clipping',dense.peak<1&&dense.rms>.002,dense);
+  const muted=metrics(await render({volume:0}));
+  check('Volume zero produz silêncio',muted.peak===0,muted);
+  const soft=metrics(await render({reverb:0},['C4'],.18));
+  const hard=metrics(await render({reverb:0},['C4'],.9));
+  check('Resposta à intensidade MIDI',hard.rms>soft.rms*1.5,{softRms:soft.rms,hardRms:hard.rms});
+  const pedal=await render({instrument:'organ',reverb:0},[],.8,(engine,context)=>{
+    engine.setSustain(true);
+    engine.synth.triggerAttack('C4',.03,.8);
+    engine.synth.triggerRelease('C4',.15);
+    context.transport.schedule(()=>engine.setSustain(false),.65);
+    context.transport.start(0);
+  });
+  const held=metrics(pedal,.25,.5), released=metrics(pedal,.85,1);
+  check('Pedal mantém e depois solta a nota',held.rms>.01&&released.rms<held.rms*.05,{heldRms:held.rms,releasedRms:released.rms});
+  document.title=results.every(result=>result.passed)?'PASSOU · áudio':'FALHA · áudio';
+  document.body.insertAdjacentHTML('beforeend',`<h2>${results.filter(result=>result.passed).length}/${results.length} verificações aprovadas</h2>`);
+} catch(error) {document.querySelector('#results').textContent += '\nERRO: '+error.stack;document.title='ERRO · áudio';}
+</script></body></html>

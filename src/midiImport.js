@@ -1,0 +1,167 @@
+// Converts a Standard MIDI File into an Allegretto song: a single melody line fitted to the
+// piano's 25 keys (C4–C6). Pure JS with no browser APIs, so it also runs under Node for testing.
+
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const LOWEST = 60;  // C4
+const HIGHEST = 84; // C6
+// Note values the lessons, training and staff all know how to draw, in beats (quarter = 1).
+const DURATIONS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4];
+const DRUM_CHANNEL = 9;
+
+export class MidiImportError extends Error {}
+
+const midiToName = midi => `${NOTE_NAMES[midi % 12]}${Math.floor(midi / 12) - 1}`;
+
+/** Parses the parts of an SMF the importer needs: notes (in ticks), first tempo, first time signature. */
+export function parseMidi(buffer) {
+  const view = new DataView(buffer instanceof ArrayBuffer ? buffer : buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+  let pos = 0;
+  const u8 = () => view.getUint8(pos++);
+  const u16 = () => { const v = view.getUint16(pos); pos += 2; return v; };
+  const u32 = () => { const v = view.getUint32(pos); pos += 4; return v; };
+  const tag = () => String.fromCharCode(u8(), u8(), u8(), u8());
+  const vlq = () => { let v = 0; let b; do { b = u8(); v = (v << 7) | (b & 0x7f); } while (b & 0x80); return v; };
+
+  if (view.byteLength < 14 || tag() !== 'MThd') throw new MidiImportError('Este arquivo não é um MIDI.');
+  const headerLength = u32();
+  u16(); // format
+  const trackCount = u16();
+  const division = u16();
+  if (division & 0x8000) throw new MidiImportError('MIDI com tempo SMPTE não é suportado.');
+  pos = 8 + headerLength;
+
+  const notes = [];
+  let tempo = null;
+  let timeSignature = null;
+  for (let t = 0; t < trackCount && pos + 8 <= view.byteLength; t += 1) {
+    const id = tag();
+    const length = u32();
+    const end = Math.min(view.byteLength, pos + length);
+    if (id !== 'MTrk') { pos = end; continue; }
+    let tick = 0;
+    let running = 0;
+    const open = new Map(); // "channel:pitch" -> [{start, velocity}]
+    while (pos < end) {
+      tick += vlq();
+      let status = view.getUint8(pos);
+      if (status & 0x80) pos += 1; else status = running;
+      if (status === 0xff) {
+        const type = u8();
+        const len = vlq();
+        if (type === 0x51 && len === 3 && tempo == null) tempo = (view.getUint8(pos) << 16) | (view.getUint8(pos + 1) << 8) | view.getUint8(pos + 2);
+        if (type === 0x58 && len >= 2 && timeSignature == null) timeSignature = [view.getUint8(pos), 2 ** view.getUint8(pos + 1)];
+        pos += len;
+        running = 0;
+        if (type === 0x2f) break;
+        continue;
+      }
+      if (status === 0xf0 || status === 0xf7) { pos += vlq(); running = 0; continue; }
+      if (!(status & 0x80)) throw new MidiImportError('O arquivo MIDI está corrompido.');
+      running = status;
+      const kind = status & 0xf0;
+      const channel = status & 0x0f;
+      const a = u8();
+      const b = kind === 0xc0 || kind === 0xd0 ? 0 : u8();
+      const key = `${channel}:${a}`;
+      if (kind === 0x90 && b > 0) {
+        if (!open.has(key)) open.set(key, []);
+        open.get(key).push({ start: tick, velocity: b });
+      } else if (kind === 0x80 || (kind === 0x90 && b === 0)) {
+        const started = open.get(key)?.shift();
+        if (started) notes.push({ pitch: a, channel, start: started.start, end: tick, velocity: started.velocity });
+      }
+    }
+    // Notes never released close at the end of their track.
+    for (const [key, list] of open) {
+      const [channel, pitch] = key.split(':').map(Number);
+      for (const started of list) notes.push({ pitch, channel, start: started.start, end: tick, velocity: started.velocity });
+    }
+    pos = end;
+  }
+  return { division, tempo: tempo ?? 500000, timeSignature: timeSignature ?? [4, 4], notes };
+}
+
+/**
+ * Picks the melody: the highest note of each onset, skipping accompaniment that sounds under a
+ * melody note still being held or that drops well below the line's recent register.
+ */
+function extractMelody(notes, division) {
+  const tolerance = division / 8; // a 32nd note
+  const sorted = notes.filter(n => n.channel !== DRUM_CHANNEL && n.end > n.start)
+    .sort((a, b) => a.start - b.start || b.pitch - a.pitch);
+  const tops = [];
+  for (const note of sorted) {
+    const last = tops[tops.length - 1];
+    if (last && note.start - last.groupStart <= tolerance) {
+      if (note.pitch > last.note.pitch) last.note = note;
+    } else {
+      tops.push({ groupStart: note.start, note });
+    }
+  }
+  const melody = [];
+  for (const { note } of tops) {
+    const current = melody[melody.length - 1];
+    const recent = melody.slice(-6);
+    const register = recent.length ? recent.reduce((sum, n) => sum + n.pitch, 0) / recent.length : note.pitch;
+    const underHeldNote = current && note.start < current.end - tolerance && note.pitch < current.pitch - 4;
+    const dropsToBass = recent.length >= 3 && note.pitch < register - 10;
+    if (underHeldNote || dropsToBass) continue;
+    melody.push(note);
+  }
+  return melody;
+}
+
+const nearestDuration = beats => DURATIONS.reduce((best, d) => (Math.abs(d - beats) < Math.abs(best - beats) ? d : best));
+
+/** Octave shift that keeps the most notes on the keyboard; anything left over is folded in by octaves. */
+function fitToKeyboard(pitches) {
+  let shift = 0;
+  let bestFit = -1;
+  for (let s = -48; s <= 48; s += 12) {
+    const fit = pitches.filter(p => p + s >= LOWEST && p + s <= HIGHEST).length;
+    if (fit > bestFit || (fit === bestFit && Math.abs(s) < Math.abs(shift))) { shift = s; bestFit = fit; }
+  }
+  const fold = p => { let q = p + shift; while (q < LOWEST) q += 12; while (q > HIGHEST) q -= 12; return q; };
+  return { shift, folded: pitches.length - bestFit, fold };
+}
+
+/** "Alicia - Clair Obscur_ Expedition 33.mid" → { title: 'Alicia', artist: 'Clair Obscur: Expedition 33' } */
+export function titleFromFileName(fileName) {
+  // Windows can't store ":" in file names, so downloads usually turn "Name: Subtitle" into "Name_ Subtitle".
+  const base = fileName.replace(/\.(mid|midi)$/i, '').replace(/_ /g, ': ').replace(/_/g, ' ').trim();
+  const [title, ...rest] = base.split(' - ');
+  return { title: title.trim() || 'Música importada', artist: rest.join(' - ').trim() || 'MIDI importado' };
+}
+
+/** Full conversion. Returns the song plus a short report the import dialog shows. */
+export function midiToSong(buffer, fileName = 'musica.mid') {
+  const { division, tempo, timeSignature, notes } = parseMidi(buffer);
+  const melody = extractMelody(notes, division);
+  if (melody.length < 2) throw new MidiImportError('Não encontrei uma melodia neste arquivo.');
+
+  const { shift, folded, fold } = fitToKeyboard(melody.map(n => n.pitch));
+  const songNotes = melody.map((note, i) => {
+    const next = melody[i + 1];
+    // Silence before the next note is folded into this one: lessons and training have no rests.
+    const beats = (next ? next.start - note.start : note.end - note.start) / division;
+    return [midiToName(fold(note.pitch)), nearestDuration(Math.min(beats, 4))];
+  });
+
+  const bpm = Math.min(220, Math.max(30, Math.round(60000000 / tempo)));
+  const totalBeats = songNotes.reduce((sum, [, d]) => sum + d, 0);
+  const notesPerSecond = songNotes.length / (totalBeats * 60 / bpm);
+  const { title, artist } = titleFromFileName(fileName);
+  return {
+    song: {
+      id: `midi-${Date.now()}`,
+      title,
+      artist,
+      difficulty: notesPerSecond < 1.6 ? 1 : notesPerSecond < 3 ? 2 : 3,
+      bpm,
+      timeSignature: `${timeSignature[0]}/${timeSignature[1]}`,
+      notes: songNotes,
+      source: 'midi',
+    },
+    report: { sourceNotes: notes.length, melodyNotes: songNotes.length, octaveShift: shift / 12, folded, seconds: Math.round(totalBeats * 60 / bpm) },
+  };
+}

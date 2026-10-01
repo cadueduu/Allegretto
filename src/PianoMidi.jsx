@@ -1,7 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as Tone from 'tone';
 import Peer from 'peerjs';
-import { Music, Volume2, Usb, Play, RotateCcw, BookOpen, X, Check, Keyboard, Sparkles, Pause, ChevronRight, AlertCircle, Target, Trophy, Zap, Radio, Users, Copy, PenLine, Trash2, Square } from 'lucide-react';
+import { Droplet, ListMusic, Music, Sun, Upload, Play, RotateCcw, X, Check, Pause, ChevronRight, AlertCircle, Target, Trophy, Zap, Radio, Users, Copy, PenLine, Trash2, Square } from 'lucide-react';
+import { createAudioEngine } from './audioEngine.js';
+import AudioVisualizer from './AudioVisualizer.jsx';
+import FreeModeStage, { FREE_LOOKS, FREE_PALETTES, FreeModeReflection, NowPlaying, noteColor } from './FreeModeStage.jsx';
+import GrandKeyboard, { GrandCase } from './GrandKeyboard.jsx';
+import { InstrumentDeck, KeyboardToolbar, FreeSongPicker, LiveBand, MidiImportDialog, ModesSection, StudioFooter, StudioHeader, StudioHero } from './StudioPanels.jsx';
+import { MidiImportError, midiToSong } from './midiImport.js';
 
 // ============================================================================
 // MULTIPLAYER CONSTANTS & HELPERS
@@ -12,10 +18,6 @@ function nameToColor(name) {
   const P = ['#9bd17e','#7bb3f0','#e07c5e','#c77ee0','#60d4c8','#f09050','#f5e050'];
   let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) | 0;
   return P[Math.abs(h) % P.length];
-}
-function lightenColor(hex) {
-  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
-  return `#${Math.min(255,r+75).toString(16).padStart(2,'0')}${Math.min(255,g+75).toString(16).padStart(2,'0')}${Math.min(255,b+75).toString(16).padStart(2,'0')}`;
 }
 
 // ============================================================================
@@ -50,13 +52,14 @@ function getNoteStaffY(name) {
 // ============================================================================
 // INSTRUMENTS
 // ============================================================================
+// Timbres live in audioEngine.js (PRESETS); ids here must match those keys.
 const INSTRUMENTS = [
-  { id: 'piano',   label: 'Piano',     opts: { oscillator: { type: 'triangle' }, envelope: { attack: 0.005, decay: 0.4,  sustain: 0.15, release: 1.4  } } },
-  { id: 'epiano',  label: 'Piano El.', opts: { oscillator: { type: 'triangle' }, envelope: { attack: 0.002, decay: 0.9,  sustain: 0.04, release: 1.8  } } },
-  { id: 'organ',   label: 'Órgão',     opts: { oscillator: { type: 'square'   }, envelope: { attack: 0.01,  decay: 0.01, sustain: 1,    release: 0.12 } } },
-  { id: 'strings', label: 'Cordas',    opts: { oscillator: { type: 'sawtooth' }, envelope: { attack: 0.4,   decay: 0.1,  sustain: 0.9,  release: 1.6  } } },
-  { id: 'flute',   label: 'Flauta',    opts: { oscillator: { type: 'sine'     }, envelope: { attack: 0.08,  decay: 0.1,  sustain: 0.85, release: 0.7  } } },
-  { id: 'bells',   label: 'Sinos',     opts: { oscillator: { type: 'triangle' }, envelope: { attack: 0.001, decay: 0.6,  sustain: 0.02, release: 1.2  } } },
+  { id: 'piano',   label: 'Piano'     },
+  { id: 'epiano',  label: 'Piano El.' },
+  { id: 'organ',   label: 'Órgão'     },
+  { id: 'strings', label: 'Cordas'    },
+  { id: 'flute',   label: 'Flauta'    },
+  { id: 'bells',   label: 'Sinos'     },
 ];
 
 // ============================================================================
@@ -92,6 +95,7 @@ const NOTES = [
 
 const KEY_TO_NOTE    = new Map(NOTES.map(n => [n.key, n]));
 const MIDI_TO_NOTE   = new Map(NOTES.map(n => [n.midi, n]));
+const NAME_TO_NOTE   = new Map(NOTES.map(n => [n.name, n]));
 const WHITE_KEYS     = NOTES.filter(n => !n.isBlack);
 const BLACK_KEYS     = NOTES.filter(n => n.isBlack);
 const WHITE_KEY_COUNT= WHITE_KEYS.length;
@@ -134,7 +138,7 @@ function getNoteTypeName(dur) {
 }
 
 // Small SVG musical note icon
-function NoteIcon({ dur, color = '#f0a830', size = 16 }) {
+function NoteIcon({ dur, color = '#d4b06a', size = 16 }) {
   const isWhole  = dur >= 3.6;
   const isHalf   = !isWhole  && dur >= 1.8;
   const is16th   = !isWhole  && !isHalf && dur < 0.4;
@@ -536,7 +540,11 @@ export default function PianoMidi() {
   const [midiStatus,     setMidiStatus]     = useState('idle');
   const [midiDeviceName, setMidiDeviceName] = useState('');
   const [audioReady,     setAudioReady]     = useState(false);
-  const [volume,         setVolume]         = useState(0.7);
+  const [volume,         setVolume]         = useState(0.85);
+  const [reverbAmount,   setReverbAmount]   = useState(0.24);
+  const [brightness,     setBrightness]     = useState(0.65);
+  const [sustain,        setSustain]        = useState(false);
+  const [audioError,     setAudioError]     = useState('');
 
   // Lesson
   const [currentSong,      setCurrentSong]      = useState(null);
@@ -585,8 +593,6 @@ export default function PianoMidi() {
   const [remoteNoteDisplay, setRemoteNoteDisplay] = useState(new Map()); // noteName → [{peerId,color}]
   const [freeMode,       setFreeMode]       = useState(false);
   const [keyClickCounts, setKeyClickCounts] = useState(() => new Map());
-  const [freeFloats,     setFreeFloats]     = useState([]); // [{id, noteName}]
-  const [risingBars,     setRisingBars]     = useState([]); // barras subindo no modo livre
   const [composerMode,   setComposerMode]   = useState(false);
   const [composerNotes,  setComposerNotes]  = useState([]); // [{id,name,dur}]
   const [composerBpm,    setComposerBpm]    = useState(90);
@@ -607,13 +613,28 @@ export default function PianoMidi() {
   // Custom songs (criadas no compositor e salvas no menu)
   const [customSongs,    setCustomSongs]    = useState(() => { try { return JSON.parse(localStorage.getItem('allegretto-custom-songs') || '[]'); } catch(e) { return []; } });
   const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [midiImport,     setMidiImport]     = useState(null); // { song, report } | { error }
+  const midiInputRef = useRef(null);
+  const midiImportTargetRef = useRef('main'); // where an imported song goes: the lesson panel or the Free Mode stage
+  const [freeSong,       setFreeSong]       = useState(null); // { title, artist } of a song put on the Free Mode stage
+  const [freePickerOpen, setFreePickerOpen] = useState(false);
+  const freeSongRef    = useRef(null);
+  const startFollowRef = useRef(null);
+  const stopFollowRef  = useRef(null);
+  useEffect(() => { freeSongRef.current = freeSong; }, [freeSong]);
   const [saveSongName,   setSaveSongName]   = useState('');
   const [instrumentId,   setInstrumentId]   = useState('piano');
+  const [freePalette,    setFreePalette]    = useState(() => { try { const p = localStorage.getItem('allegretto-free-palette'); return FREE_PALETTES[p] ? p : 'gold'; } catch(e) { return 'gold'; } });
+  useEffect(() => { try { localStorage.setItem('allegretto-free-palette', freePalette); } catch(e) {} }, [freePalette]);
+  const [freeLook,       setFreeLook]       = useState(() => { try { const l = localStorage.getItem('allegretto-free-look'); return FREE_LOOKS[l] ? l : 'glass'; } catch(e) { return 'glass'; } });
+  useEffect(() => { try { localStorage.setItem('allegretto-free-look', freeLook); } catch(e) {} }, [freeLook]);
 
   // Audio refs
   const synthRef       = useRef(null);
-  const reverbRef      = useRef(null);
+  const audioEngineRef = useRef(null);
+  const analyserRef    = useRef(null);
   const audioReadyRef  = useRef(false);
+  const pendingNotesRefAudio = useRef(new Map());
 
   // Input dedup
   const pressedKeysRef  = useRef(new Set());
@@ -626,9 +647,9 @@ export default function PianoMidi() {
   const peerRef          = useRef(null);
   const mpHostRef        = useRef(false);
   const mpInRoomRef      = useRef(false);
-  const mpMeRef          = useRef({ name:'', color:'#f0a830', id:'' });
+  const mpMeRef          = useRef({ name:'', color:'#d4b06a', id:'' });
   const mpConnsRef       = useRef(new Map()); // peerId → { conn, name, color }
-  const mpSynthsRef      = useRef(new Map()); // peerId → { synth, reverb }
+  const mpSynthsRef      = useRef(new Map()); // peerId → { synth } through the master bus
   const mpMembersRef     = useRef([]);
   const remoteNotesRef   = useRef(new Map()); // noteName → [{peerId, color}]
   const broadcastNoteRef = useRef(null);       // always-fresh broadcast fn
@@ -637,9 +658,6 @@ export default function PianoMidi() {
   const freeFloatIdRef        = useRef(0);
   const risingBarsRef         = useRef([]);
   const risingBarIdRef        = useRef(0);
-  const risingRafRef          = useRef(null);
-  const risingUpdateRef       = useRef(null);
-  const risingCanvasRef       = useRef(null);
   const createFreeModeBarRef  = useRef(null);
   const releaseFreeModeBarRef = useRef(null);
   const composerModeRef       = useRef(false);
@@ -719,43 +737,57 @@ export default function PianoMidi() {
   // Audio setup
   // ---------------------------------------------------------------
   useEffect(() => {
-    const reverb = new Tone.Reverb({ decay: 1.8, wet: 0.2 }).toDestination();
-    const synth  = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: 'triangle' },
-      envelope:   { attack: 0.005, decay: 0.4, sustain: 0.15, release: 1.4 },
-    }).connect(reverb);
-    synth.volume.value = Tone.gainToDb(0.7);
-    synthRef.current   = synth;
-    reverbRef.current  = reverb;
-    return () => { try { synth.dispose(); reverb.dispose(); } catch (e) {} };
+    const engine = createAudioEngine();
+    audioEngineRef.current = engine;
+    analyserRef.current = engine.analyser;
+    synthRef.current = engine.synth;
+    return () => {
+      pendingNotesRefAudio.current.clear();
+      engine.dispose();
+      synthRef.current = null;
+      audioEngineRef.current = null;
+      analyserRef.current = null;
+    };
   }, []);
 
-  useEffect(() => {
-    if (synthRef.current) synthRef.current.volume.value = Tone.gainToDb(Math.max(0.001, volume));
-  }, [volume]);
-
+  useEffect(() => { audioEngineRef.current?.setVolume(volume); }, [volume]);
+  useEffect(() => { audioEngineRef.current?.setReverb(reverbAmount); }, [reverbAmount]);
+  useEffect(() => { audioEngineRef.current?.setBrightness(brightness); }, [brightness]);
+  useEffect(() => { audioEngineRef.current?.setSustain(sustain); }, [sustain]);
   useEffect(() => { audioReadyRef.current = audioReady; }, [audioReady]);
+  const getAudioFrame = useCallback(() => audioEngineRef.current?.getAudioFrame() || null, []);
 
   // Instrument change
   useEffect(() => {
-    const inst = INSTRUMENTS.find(i => i.id === instrumentId);
-    if (!inst || !synthRef.current) return;
-    try { synthRef.current.set(inst.opts); } catch(e) {}
+    audioEngineRef.current?.setInstrument(instrumentId);
   }, [instrumentId]);
 
   const ensureAudio = useCallback(async () => {
     if (!audioReadyRef.current || Tone.context.state !== 'running') {
-      try { await Tone.start(); audioReadyRef.current = true; setAudioReady(true); } catch (e) {}
+      try {
+        await Tone.start();
+        audioReadyRef.current = true;
+        setAudioReady(true);
+        setAudioError('');
+      } catch (e) {
+        setAudioError('Não foi possível ativar o áudio. Tente novamente.');
+        return false;
+      }
     }
+    return true;
   }, []);
 
   // ---------------------------------------------------------------
   // Play note — called on every key press regardless of mode
   // ---------------------------------------------------------------
-  const playNote = useCallback(async (noteName, isMidi = false) => {
-    await ensureAudio();
+  const playNote = useCallback(async (noteName, isMidi = false, velocity = 0.78) => {
+    const press = Symbol(noteName);
+    pendingNotesRefAudio.current.set(noteName, press);
+    const ready = await ensureAudio();
+    // A quick first tap may end while the browser is resuming its audio context.
+    if (!ready || pendingNotesRefAudio.current.get(noteName) !== press) return;
     // Always play the sound the player triggers — sustain until key is released
-    try { synthRef.current?.triggerAttack(noteName); } catch (e) {}
+    try { synthRef.current?.triggerAttack(noteName, undefined, velocity); } catch (e) {}
     setActiveNotes(prev => { const s = new Set(prev); s.add(noteName); return s; });
     broadcastNoteRef.current?.(noteName, 'on');
     freeModePlayRef.current?.(noteName);
@@ -893,6 +925,7 @@ export default function PianoMidi() {
 
   // Release a note (stops sustain, dims key)
   const releaseNote = useCallback((noteName) => {
+    pendingNotesRefAudio.current.delete(noteName);
     try { synthRef.current?.triggerRelease(noteName); } catch (e) {}
     setActiveNotes(prev => { const s = new Set(prev); s.delete(noteName); return s; });
     broadcastNoteRef.current?.(noteName, 'off');
@@ -912,28 +945,14 @@ export default function PianoMidi() {
       if (!freeModeRef.current) return;
       if (composerModeRef.current && !composerSavedRef.current) return; // só bloqueia quando editando
       setKeyClickCounts(prev => { const n = new Map(prev); n.set(noteName, (n.get(noteName)||0)+1); return n; });
-      const barColor = mpInRoomRef.current ? mpMeRef.current.color : '#ffffff';
+      // In a room bars take the player's color; solo, FreeModeStage colors them by pitch.
+      const barColor = mpInRoomRef.current ? mpMeRef.current.color : null;
       createFreeModeBarRef.current?.(noteName, barColor);
     };
   }); // no deps — always fresh
 
+  // Bars only record timing; FreeModeStage derives size/position per frame and prunes them.
   useEffect(() => {
-    risingUpdateRef.current = () => {
-      const now = performance.now();
-      const canvasH = risingCanvasRef.current?.offsetHeight || 600;
-      const updated = risingBarsRef.current.map(bar => {
-        if (!bar.released) return { ...bar, height: Math.max(40, (now - bar.startTime) * 0.16) };
-        const el = now - bar.releaseTime;
-        const floatY = el * 0.38;
-        const fadeStart = Math.max(0, canvasH - bar.height - 40);
-        const opacity = floatY < fadeStart ? 1 : Math.max(0, 1 - (floatY - fadeStart) / (canvasH - fadeStart + bar.height));
-        return { ...bar, floatY, opacity };
-      }).filter(b => !b.released || b.floatY <= b.height + (risingCanvasRef.current?.offsetHeight || 600));
-      risingBarsRef.current = updated;
-      setRisingBars([...updated]);
-      if (updated.length) risingRafRef.current = setTimeout(risingUpdateRef.current, 16);
-      else risingRafRef.current = null;
-    };
     createFreeModeBarRef.current = (noteName, color) => {
       if (!freeModeRef.current) return;
       const note = NOTES.find(n => n.name === noteName);
@@ -943,12 +962,8 @@ export default function PianoMidi() {
       const barW = note.isBlack ? WHITE_KEY_WIDTH * 0.55 : WHITE_KEY_WIDTH - 0.3;
       const id = ++risingBarIdRef.current;
       risingBarsRef.current = [...risingBarsRef.current,
-        { id, noteName, startTime: performance.now(), height: 40, released: false, floatY: 0, opacity: 1, isBlack: note.isBlack, left: barLeft, width: barW, color }
+        { id, noteName, midi: note.midi, startTime: performance.now(), released: false, isBlack: note.isBlack, left: barLeft, width: barW, color }
       ];
-      if (risingUpdateRef.current) {
-        if (risingRafRef.current) clearTimeout(risingRafRef.current);
-        risingRafRef.current = setTimeout(risingUpdateRef.current, 16);
-      }
     };
     releaseFreeModeBarRef.current = (noteName) => {
       const now = performance.now();
@@ -996,19 +1011,14 @@ export default function PianoMidi() {
   function mpCreateSynth(peerId) {
     if (mpSynthsRef.current.has(peerId)) return;
     try {
-      const rev = new Tone.Reverb({ decay: 1.8, wet: 0.15 }).toDestination();
-      const syn = new Tone.PolySynth(Tone.Synth, {
-        oscillator: { type: 'triangle' },
-        envelope: { attack: 0.005, decay: 0.4, sustain: 0.15, release: 1.4 },
-      }).connect(rev);
-      syn.volume.value = Tone.gainToDb(0.65);
-      mpSynthsRef.current.set(peerId, { synth: syn, reverb: rev });
+      const synth = audioEngineRef.current?.createRemoteVoice();
+      if (synth) mpSynthsRef.current.set(peerId, { synth });
     } catch(e) {}
   }
 
   function mpDestroySynth(peerId) {
     const s = mpSynthsRef.current.get(peerId);
-    if (s) { try { s.synth.dispose(); s.reverb.dispose(); } catch(e) {} mpSynthsRef.current.delete(peerId); }
+    if (s) { try { s.synth.dispose(); } catch(e) {} mpSynthsRef.current.delete(peerId); }
   }
 
   function mpHandleRemoteNote(peerId, noteName, type) {
@@ -1084,6 +1094,17 @@ export default function PianoMidi() {
     mpConnsRef.current.forEach(({ conn }, pid) => { if (pid !== exceptId) try { conn.send(msg); } catch(e) {} });
   }
 
+  // A song put on the Free Mode stage, locally or by someone in the room.
+  function mpApplySongLoad(msg) {
+    if (!freeModeRef.current) setFreeMode(true);
+    stopFollowRef.current?.();
+    setComposerNotes(msg.notes || []);
+    if (msg.bpm) setComposerBpm(msg.bpm);
+    if (msg.timeSig) setComposerTimeSig(msg.timeSig);
+    setComposerMode(true); setComposerSaved(true);
+    setFreeSong(msg.title ? { title: msg.title, artist: msg.artist } : null);
+  }
+
   function mpSetupHostHandlers(conn) {
     conn.on('open', () => {
       conn.send({ type: 'members', list: mpMembersRef.current });
@@ -1107,7 +1128,7 @@ export default function PianoMidi() {
           }
           // Sync compositor state
           if (composerModeRef.current) {
-            try { conn.send({ type: 'composer_sync', notes: composerNotesRef.current, bpm: composerBpmRef.current, timeSig: composerTimeSigRef.current, saved: composerSavedRef.current }); } catch(e) {}
+            try { conn.send({ type: 'composer_sync', notes: composerNotesRef.current, bpm: composerBpmRef.current, timeSig: composerTimeSigRef.current, saved: composerSavedRef.current, song: freeSongRef.current }); } catch(e) {}
           }
         }, 100);
       } else if (msg.type === 'note_on') {
@@ -1142,10 +1163,10 @@ export default function PianoMidi() {
         mpBroadcastAll({ type: 'sheet_stop' }, conn.peer);
       } else if (msg.type === 'composer_enter') {
         if (!freeModeRef.current) setFreeMode(true);
-        setComposerMode(true); setComposerSaved(false);
+        setComposerMode(true); setComposerSaved(false); setFreeSong(null);
         mpBroadcastAll({ type: 'composer_enter' }, conn.peer);
       } else if (msg.type === 'composer_exit') {
-        setComposerMode(false); setComposerSaved(false);
+        setComposerMode(false); setComposerSaved(false); setFreeSong(null);
         mpBroadcastAll({ type: 'composer_exit' }, conn.peer);
       } else if (msg.type === 'composer_note_add') {
         setComposerNotes(p => [...p, msg.note]);
@@ -1168,6 +1189,15 @@ export default function PianoMidi() {
         if (msg.timeSig) setComposerTimeSig(msg.timeSig);
         setComposerSaved(true);
         mpBroadcastAll({ type: 'composer_saved', notes: msg.notes, bpm: msg.bpm, timeSig: msg.timeSig }, conn.peer);
+      } else if (msg.type === 'song_load') {
+        mpApplySongLoad(msg);
+        mpBroadcastAll(msg, conn.peer);
+      } else if (msg.type === 'follow_start') {
+        setTimeout(() => startFollowRef.current?.(composerNotesRef.current, composerBpmRef.current), 0);
+        mpBroadcastAll({ type: 'follow_start' }, conn.peer);
+      } else if (msg.type === 'follow_stop') {
+        stopFollowRef.current?.();
+        mpBroadcastAll({ type: 'follow_stop' }, conn.peer);
       } else if (msg.type === 'composer_sync') {
         // sync-on-join: não relayar, só aplicar
         if (!freeModeRef.current) setFreeMode(true);
@@ -1176,6 +1206,7 @@ export default function PianoMidi() {
         if (msg.bpm) setComposerBpm(msg.bpm);
         if (msg.timeSig) setComposerTimeSig(msg.timeSig);
         if (msg.saved) setComposerSaved(true);
+        setFreeSong(msg.song || null);
       }
     });
     conn.on('close', () => {
@@ -1268,9 +1299,9 @@ export default function PianoMidi() {
                 stopSheetRef.current?.();
               } else if (msg.type === 'composer_enter') {
                 if (!freeModeRef.current) setFreeMode(true);
-                setComposerMode(true); setComposerSaved(false);
+                setComposerMode(true); setComposerSaved(false); setFreeSong(null);
               } else if (msg.type === 'composer_exit') {
-                setComposerMode(false); setComposerSaved(false);
+                setComposerMode(false); setComposerSaved(false); setFreeSong(null);
               } else if (msg.type === 'composer_note_add') {
                 setComposerNotes(p => [...p, msg.note]);
               } else if (msg.type === 'composer_note_delete') {
@@ -1286,6 +1317,12 @@ export default function PianoMidi() {
                 if (msg.bpm) setComposerBpm(msg.bpm);
                 if (msg.timeSig) setComposerTimeSig(msg.timeSig);
                 setComposerSaved(true);
+              } else if (msg.type === 'song_load') {
+                mpApplySongLoad(msg);
+              } else if (msg.type === 'follow_start') {
+                setTimeout(() => startFollowRef.current?.(composerNotesRef.current, composerBpmRef.current), 0);
+              } else if (msg.type === 'follow_stop') {
+                stopFollowRef.current?.();
               } else if (msg.type === 'composer_sync') {
                 if (!freeModeRef.current) setFreeMode(true);
                 setComposerMode(true);
@@ -1293,6 +1330,7 @@ export default function PianoMidi() {
                 if (msg.bpm) setComposerBpm(msg.bpm);
                 if (msg.timeSig) setComposerTimeSig(msg.timeSig);
                 if (msg.saved) setComposerSaved(true);
+                setFreeSong(msg.song || null);
               }
           });
           conn.on('close', () => { setMpStatus('Host desconectou.'); leaveRoom(); });
@@ -1308,7 +1346,7 @@ export default function PianoMidi() {
   const leaveRoom = useCallback(() => {
     mpConnsRef.current.forEach(({ conn }) => { try { conn.close(); } catch(e) {} });
     mpConnsRef.current.clear();
-    mpSynthsRef.current.forEach(s => { try { s.synth.dispose(); s.reverb.dispose(); } catch(e) {} });
+    mpSynthsRef.current.forEach(s => { try { s.synth.dispose(); } catch(e) {} });
     mpSynthsRef.current.clear();
     remoteNotesRef.current.clear(); setRemoteNoteDisplay(new Map());
     if (peerRef.current) { try { peerRef.current.destroy(); } catch(e) {} peerRef.current = null; }
@@ -1332,7 +1370,6 @@ export default function PianoMidi() {
   // Cleanup on unmount
   useEffect(() => () => {
     leaveRoom();
-    if (risingRafRef.current) clearTimeout(risingRafRef.current);
   }, []); // eslint-disable-line
 
   // ---------------------------------------------------------------
@@ -1748,6 +1785,7 @@ export default function PianoMidi() {
     try { synthRef.current?.releaseAll(); } catch(e) {}
     setActiveNotes(new Set());
   }, []);
+  useEffect(() => { startFollowRef.current = startFollow; stopFollowRef.current = stopFollow; }, [startFollow, stopFollow]);
 
   useEffect(() => () => {
     if (rafRef.current)    cancelAnimationFrame(rafRef.current);
@@ -1766,7 +1804,9 @@ export default function PianoMidi() {
     const down = (e) => {
       if (e.repeat) return;
       const tag = e.target?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      // Sliders don't take letters, so the piano keeps playing after adjusting the sound.
+      const isTextInput = tag === 'INPUT' && e.target.type !== 'range';
+      if (isTextInput || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable || e.ctrlKey || e.metaKey || e.altKey) return;
       const key = e.key.toLowerCase();
       if (pressedKeysRef.current.has(key)) return;
       const note = KEY_TO_NOTE.get(key);
@@ -1774,6 +1814,7 @@ export default function PianoMidi() {
     };
     const up = (e) => {
       const k = e.key.toLowerCase();
+      if (!pressedKeysRef.current.has(k)) return;
       pressedKeysRef.current.delete(k);
       const note = KEY_TO_NOTE.get(k);
       if (note) releaseNoteRef.current?.(note.name);
@@ -1781,6 +1822,31 @@ export default function PianoMidi() {
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
+  }, []);
+
+  // Release physical inputs when focus is lost; browsers may omit their key-up.
+  useEffect(() => {
+    const releaseInputs = () => {
+      for (const noteName of pendingNotesRefAudio.current.keys()) {
+        broadcastNoteRef.current?.(noteName, 'off');
+        releaseFreeModeBarRef.current?.(noteName);
+      }
+      pendingNotesRefAudio.current.clear();
+      pressedKeysRef.current.clear();
+      midiPressedRef.current.clear();
+      pianoPointerRef.current.clear();
+      synthRef.current?.releaseAll();
+      audioEngineRef.current?.setSustain(false);
+      setSustain(false);
+      setActiveNotes(new Set());
+    };
+    const onVisibility = () => { if (document.hidden) releaseInputs(); };
+    window.addEventListener('blur', releaseInputs);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('blur', releaseInputs);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, []);
 
   // ---------------------------------------------------------------
@@ -1792,6 +1858,11 @@ export default function PianoMidi() {
     const onMsg = (event) => {
       const d = event.data; if (!d || d.length < 2) return;
       const cmd = d[0] & 0xf0, mn = d[1], vel = d[2] ?? 0;
+      if (cmd === 0xb0 && mn === 64) {
+        audioEngineRef.current?.setSustain(vel >= 64);
+        setSustain(vel >= 64);
+        return;
+      }
       if (cmd === 0x80 || (cmd === 0x90 && vel === 0)) {
         midiPressedRef.current.delete(mn);
         const offNote = findNoteByMidi(mn);
@@ -1803,8 +1874,7 @@ export default function PianoMidi() {
         midiPressedRef.current.add(mn);
         const note = findNoteByMidi(mn);
         if (note) {
-          if (!audioReadyRef.current) Tone.start().then(() => { audioReadyRef.current = true; setAudioReady(true); }).catch(() => {});
-          playNoteRef.current?.(note.name, true); // isMidi=true: match lesson by pitch class
+          playNoteRef.current?.(note.name, true, vel / 127); // Match lessons by pitch class; preserve key velocity.
         }
       }
     };
@@ -1827,6 +1897,46 @@ export default function PianoMidi() {
     stopTraining(); setTrainingMode(false); stopSheet(); setSheetMode(false);
     mpBroadStateRef.current?.({ type: 'song_select', songId: song.id });
   };
+  // Both follow a click, so they also unlock audio before the first note.
+  const goToPiano = () => { ensureAudio(); document.getElementById('piano')?.scrollIntoView(); };
+  const pickSong = (song) => {
+    selectSong(song);
+    ensureAudio();
+    // Wait for the song panel to mount above the piano, then bring it into view.
+    requestAnimationFrame(() => document.getElementById('song-panel')?.scrollIntoView());
+  };
+  // MIDI import: read the file, show what was extracted, then save it next to the composer's songs.
+  const handleMidiFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // lets the same file be picked again
+    if (!file) return;
+    try {
+      setMidiImport(midiToSong(await file.arrayBuffer(), file.name));
+    } catch (err) {
+      setMidiImport({ error: err instanceof MidiImportError ? err.message : 'Não foi possível ler este arquivo MIDI.' });
+    }
+  };
+  const confirmMidiImport = ({ title, artist }) => {
+    const song = { ...midiImport.song, title, artist };
+    const upd = [...customSongs, song];
+    setCustomSongs(upd); try { localStorage.setItem('allegretto-custom-songs', JSON.stringify(upd)); } catch(e) {}
+    setMidiImport(null);
+    if (midiImportTargetRef.current === 'free') loadSongIntoFree(song); else pickSong(song);
+    midiImportTargetRef.current = 'main';
+  };
+  // Puts any song (repertoire, composed or imported) on the Free Mode staff; in a room everyone gets it.
+  const loadSongIntoFree = (song) => {
+    const stamp = Date.now();
+    const notes = song.notes.map((n, i) => { const p = parseNote(n); return { id: `song-${stamp}-${i}`, name: p.name, dur: p.dur }; });
+    const msg = { type: 'song_load', notes, bpm: song.bpm || 90, timeSig: song.timeSignature || '4/4', title: song.title, artist: song.artist };
+    stopComposer();
+    mpApplySongLoad(msg);
+    setFreePickerOpen(false);
+    mpBroadStateRef.current?.(msg);
+  };
+  // "Acompanhar" starts for the whole room at once; each player keeps their own score.
+  const startGroupFollow = () => { startFollow(composerNotes, composerBpm); mpBroadStateRef.current?.({ type: 'follow_start' }); };
+  const stopGroupFollow  = () => { stopFollow(); mpBroadStateRef.current?.({ type: 'follow_stop' }); };
   const restartSong = () => { setCurrentNoteIndex(0); setSongComplete(false); };
   const closeSong   = () => { setCurrentSong(null); setCurrentNoteIndex(0); setSongComplete(false); stopTraining(); setTrainingMode(false); stopSheet(); setSheetMode(false); };
 
@@ -1891,6 +2001,13 @@ export default function PianoMidi() {
   };
   const midiInfo = midiBadge();
 
+  // Free mode session stats for the header.
+  let freeTotal = 0, freeTop = null, freeTopCount = 0;
+  keyClickCounts.forEach((count, name) => {
+    freeTotal += count;
+    if (count > freeTopCount) { freeTopCount = count; freeTop = NOTES.find(n => n.name === name); }
+  });
+
   const totalHits  = trainingHits.perfect + trainingHits.good + trainingHits.miss;
   const accuracy   = totalHits > 0 ? Math.round(((trainingHits.perfect + trainingHits.good) / totalHits) * 100) : 0;
   const isTraining = trainingState !== 'idle';
@@ -1908,16 +2025,17 @@ export default function PianoMidi() {
   // RENDER
   // ---------------------------------------------------------------
   return (
-    <div className="min-h-screen w-full overflow-x-hidden" style={{ background:'radial-gradient(ellipse at top,#1f1815 0%,#0d0a08 60%,#050403 100%)', fontFamily:'"Inter",ui-sans-serif,system-ui,sans-serif', color:'#e8dfd0' }}>
+    // overflow-x-clip (not hidden) so the sticky header still sticks to the viewport.
+    <div id="top" className="studio-page min-h-screen w-full overflow-x-clip" style={{ fontFamily:'"Inter",ui-sans-serif,system-ui,sans-serif', color:'#e8dfd0' }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..900,0..100&family=Inter:wght@300;400;500;600;700&display=swap');
-        @keyframes pulseGlow { 0%,100%{box-shadow:0 0 0 0 rgba(240,168,48,.7),0 0 30px 4px rgba(240,168,48,.55);}50%{box-shadow:0 0 0 12px rgba(240,168,48,0),0 0 50px 10px rgba(240,168,48,.85);} }
+        @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=Inter:wght@300;400;500;600;700&display=swap');
+        @keyframes pulseGlow { 0%,100%{box-shadow:0 0 0 0 rgba(212,176,106,.7),0 0 30px 4px rgba(212,176,106,.55);}50%{box-shadow:0 0 0 12px rgba(212,176,106,0),0 0 50px 10px rgba(212,176,106,.85);} }
         @keyframes shimmerIn { from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);} }
         @keyframes celebrate { 0%{transform:scale(.9);opacity:0;}50%{transform:scale(1.05);}100%{transform:scale(1);opacity:1;} }
         @keyframes feedbackPop { 0%{transform:translateX(-50%) scale(.8);opacity:0;}30%{transform:translateX(-50%) scale(1.2);opacity:1;}80%{opacity:1;}100%{transform:translateX(-50%) translateY(-20px) scale(1);opacity:0;} }
         @keyframes cdPulse { 0%{transform:translate(-50%,-50%) scale(1.4);opacity:0;}40%{opacity:1;}100%{transform:translate(-50%,-50%) scale(1);opacity:1;} }
-        @keyframes hzPulse { 0%,100%{box-shadow:0 0 0 0 rgba(240,168,48,.3),0 -2px 20px rgba(240,168,48,.15);}50%{box-shadow:0 0 0 6px rgba(240,168,48,0),0 -2px 28px rgba(240,168,48,.35);} }
-        .display-font{font-family:'Fraunces',Georgia,serif;font-optical-sizing:auto;}
+        @keyframes hzPulse { 0%,100%{box-shadow:0 0 0 0 rgba(212,176,106,.3),0 -2px 20px rgba(212,176,106,.15);}50%{box-shadow:0 0 0 6px rgba(212,176,106,0),0 -2px 28px rgba(212,176,106,.35);} }
+        .display-font{font-family:'Cormorant Garamond',Georgia,serif;}
         .key-press-anim{transition:transform 60ms ease-out,background 100ms;}
         .lesson-glow{animation:pulseGlow 1.6s ease-in-out infinite;}
         .fade-in{animation:shimmerIn .5s ease-out both;}
@@ -1927,105 +2045,56 @@ export default function PianoMidi() {
         .hz-bar{animation:hzPulse 2s ease-in-out infinite;}
         @keyframes floatUp{0%{transform:translateX(-50%) translateY(0);opacity:1;}100%{transform:translateX(-50%) translateY(-58px);opacity:0;}}
         .free-float{animation:floatUp .85s ease-out forwards;position:absolute;left:50%;bottom:105%;pointer-events:none;z-index:30;font-weight:800;white-space:nowrap;}
-        button:focus-visible{outline:2px solid #f0a830;outline-offset:3px;}
+        button:focus-visible{outline:2px solid #d4b06a;outline-offset:3px;}
       `}</style>
 
-      {/* HEADER */}
-      <header className="px-6 md:px-10 pt-8 pb-4 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-xl flex items-center justify-center" style={{ background:'linear-gradient(135deg,#f0a830,#c97e1a)', boxShadow:'0 8px 24px -8px rgba(240,168,48,.5),inset 0 1px 0 rgba(255,255,255,.2)' }}>
-            <Music size={22} strokeWidth={2.4} style={{ color:'#1a1108' }} />
-          </div>
-          <div>
-            <h1 className="display-font text-2xl md:text-3xl tracking-tight leading-none" style={{ color:'#f5efe6', fontWeight:500, fontStyle:'italic' }}>Allegretto</h1>
-            <p className="text-xs tracking-[.18em] uppercase mt-1" style={{ color:'#8a7d6c' }}>Piano · MIDI · Lições · Treino · Partitura</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-3 flex-wrap">
-          {/* Live Room badge / button */}
-          {mpInRoom ? (
-            <button onClick={() => setMpOpen(true)} className="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold transition-all hover:scale-105" style={{ background:'rgba(155,209,126,.12)', border:'1px solid rgba(155,209,126,.35)', color:'#9bd17e' }}>
-              <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping" style={{background:'#9bd17e'}}/><span className="relative inline-flex rounded-full h-2 w-2" style={{background:'#9bd17e'}}/></span>
-              <Users size={13}/> {mpCode} · {mpMembers.length} {mpMembers.length === 1 ? 'músico' : 'músicos'}
-            </button>
-          ) : (
-            <button onClick={() => setMpOpen(true)} className="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold transition-all hover:scale-105" style={{ background:'rgba(255,255,255,.04)', border:'1px solid rgba(255,255,255,.08)', color:'#a89a87' }}>
-              <Radio size={13}/> Ao Vivo
-            </button>
-          )}
-          <div className="flex items-center gap-2 px-4 py-2 rounded-full" style={{ background:'rgba(255,255,255,.03)', border:'1px solid rgba(255,255,255,.06)' }}>
-            <Usb size={16} style={{ color:midiInfo.color }} />
-            <span className="relative flex h-2 w-2">
-              {midiStatus==='connected' && <span className="absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping" style={{ background:midiInfo.dot }}/>}
-              <span className="relative inline-flex rounded-full h-2 w-2" style={{ background:midiInfo.dot }}/>
-            </span>
-            <div className="text-[11px] leading-tight">
-              <div style={{ color:midiInfo.color, fontWeight:600 }}>{midiInfo.label}</div>
-              {midiInfo.sub && <div style={{ color:'#6b6052', fontSize:10 }} className="truncate max-w-[180px]">{midiInfo.sub}</div>}
-            </div>
-          </div>
-          {!audioReady && (
-            <button onClick={ensureAudio} className="px-4 py-2 rounded-full text-sm flex items-center gap-2 transition-all hover:scale-105" style={{ background:'linear-gradient(135deg,#f0a830,#c97e1a)', color:'#1a1108', fontWeight:600 }}>
-              <Sparkles size={14}/> Ativar Som
-            </button>
-          )}
-        </div>
-      </header>
+      <StudioHeader
+        midiInfo={midiInfo}
+        audioReady={audioReady}
+        onAudio={ensureAudio}
+        onPlay={goToPiano}
+        onLibrary={() => setShowSongList(true)}
+        onModes={() => document.getElementById('modos')?.scrollIntoView()}
+        onRoom={() => setMpOpen(true)}
+        inRoom={mpInRoom}
+        roomCode={mpCode}
+        memberCount={`${mpMembers.length} ${mpMembers.length === 1 ? 'músico' : 'músicos'}`}
+      />
 
-      <main className="px-6 md:px-10 pb-32">
+      <main className="px-6 md:px-10">
 
-        {/* HERO */}
-        <section className="max-w-6xl mx-auto mb-10 mt-2 grid lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 fade-in">
-            <p className="text-xs tracking-[.25em] uppercase mb-3" style={{ color:'#c97e1a' }}>Aprenda tocando</p>
-            <h2 className="display-font text-4xl md:text-5xl leading-[1.05] tracking-tight mb-4" style={{ color:'#f5efe6', fontWeight:400 }}>
-              Toque <span style={{ fontStyle:'italic', color:'#f0a830' }}>músicas conhecidas</span><br/>
-              ou entre no <span style={{ fontStyle:'italic' }}>modo treino</span>.
-            </h2>
-            <p className="text-sm md:text-base max-w-2xl leading-relaxed" style={{ color:'#a89a87' }}>
-              Três modos: <strong style={{color:'#f0a830'}}>Aprender</strong> guia nota a nota, <strong style={{color:'#f0a830'}}>Treino</strong> lança notas como Guitar Hero, e <strong style={{color:'#f0a830'}}>Partitura</strong> rola a pauta musical em tempo real para você tocar no ritmo exato.
-            </p>
-          </div>
-          <div className="fade-in" style={{ animationDelay:'.15s' }}>
-            <button onClick={() => setShowSongList(true)} className="w-full p-5 rounded-2xl text-left transition-all hover:scale-[1.02] group" style={{ background:'linear-gradient(135deg,rgba(240,168,48,.12),rgba(240,168,48,.04))', border:'1px solid rgba(240,168,48,.25)' }}>
-              <div className="flex items-center justify-between mb-2">
-                <BookOpen size={20} style={{ color:'#f0a830' }}/>
-                <ChevronRight size={18} style={{ color:'#f0a830' }} className="group-hover:translate-x-1 transition-transform"/>
-              </div>
-              <div className="display-font text-2xl leading-tight mb-1" style={{ color:'#f5efe6' }}>{currentSong ? currentSong.title : 'Escolher música'}</div>
-              <div className="text-xs flex items-center gap-2 flex-wrap" style={{ color:'#a89a87' }}>
-                <span>{currentSong ? `${currentSong.artist} · clique para trocar` : `${SONGS.length} músicas disponíveis`}</span>
-                {currentSong?.timeSignature && (
-                  <span className="display-font" style={{ fontSize:11, color:'#f0a830', background:'rgba(240,168,48,.1)', border:'1px solid rgba(240,168,48,.2)', borderRadius:4, padding:'1px 6px' }}>{currentSong.timeSignature}</span>
-                )}
-              </div>
-            </button>
-          </div>
-        </section>
+        <StudioHero
+          songs={SONGS}
+          songCount={SONGS.length}
+          currentSongId={currentSong?.id}
+          onSelect={pickSong}
+          onPlay={goToPiano}
+          onLibrary={() => setShowSongList(true)}
+        />
 
         {/* SONG PANEL */}
         {currentSong && (
-          <section className="max-w-6xl mx-auto mb-4 fade-in">
+          <section id="song-panel" className="song-panel max-w-6xl mx-auto mb-4 fade-in">
             <div className="rounded-2xl p-5 md:p-6" style={{ background:'linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.01))', border:'1px solid rgba(255,255,255,.08)' }}>
               <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
                 <div>
-                  <div className="text-xs tracking-[.2em] uppercase mb-1" style={{ color:'#c97e1a' }}>
+                  <div className="text-xs tracking-[.2em] uppercase mb-1" style={{ color:'#a9823e' }}>
                     {trainingMode ? '🎮 Modo Treino' : sheetMode ? '🎼 Partitura' : (songComplete ? '✦ Completa' : 'Aprendendo')}
                   </div>
                   <div className="display-font text-2xl md:text-3xl" style={{ color:'#f5efe6' }}>{currentSong.title}</div>
                   <div className="text-xs mt-1 flex items-center gap-2 flex-wrap" style={{ color:'#8a7d6c' }}>
                     <span>{currentSong.artist} · {parsedSongNotes.length} notas · ~{Math.round(songBeats(currentSong) / (currentSong.bpm/60))}s</span>
                     {currentSong.timeSignature && (
-                      <span className="display-font" style={{ fontSize:11, color:'#f0a830', background:'rgba(240,168,48,.1)', border:'1px solid rgba(240,168,48,.2)', borderRadius:4, padding:'1px 6px' }}>{currentSong.timeSignature}</span>
+                      <span className="display-font" style={{ fontSize:11, color:'#d4b06a', background:'rgba(212,176,106,.1)', border:'1px solid rgba(212,176,106,.2)', borderRadius:4, padding:'1px 6px' }}>{currentSong.timeSignature}</span>
                     )}
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
                   {/* Mode toggle */}
                   <div className="flex rounded-full overflow-hidden" style={{ border:'1px solid rgba(255,255,255,.1)' }}>
-                    <button onClick={() => { setTrainingMode(false); stopTraining(); setSheetMode(false); stopSheet(); }} className="px-3 py-1.5 text-xs font-medium transition-colors" style={{ background:!trainingMode&&!sheetMode?'rgba(240,168,48,.2)':'transparent', color:!trainingMode&&!sheetMode?'#f0a830':'#8a7d6c' }}>🎓 Aprender</button>
-                    <button onClick={() => { setTrainingMode(true); setSheetMode(false); stopSheet(); }} className="px-3 py-1.5 text-xs font-medium transition-colors" style={{ background:trainingMode?'rgba(240,168,48,.2)':'transparent', color:trainingMode?'#f0a830':'#8a7d6c' }}>🎮 Treinar</button>
-                    <button onClick={() => { setSheetMode(true); setTrainingMode(false); stopTraining(); mpBroadStateRef.current?.({ type: 'sheet_mode', on: true }); }} className="px-3 py-1.5 text-xs font-medium transition-colors" style={{ background:sheetMode?'rgba(240,168,48,.2)':'transparent', color:sheetMode?'#f0a830':'#8a7d6c' }}>🎼 Partitura</button>
+                    <button onClick={() => { setTrainingMode(false); stopTraining(); setSheetMode(false); stopSheet(); }} className="px-3 py-1.5 text-xs font-medium transition-colors" style={{ background:!trainingMode&&!sheetMode?'rgba(212,176,106,.2)':'transparent', color:!trainingMode&&!sheetMode?'#d4b06a':'#8a7d6c' }}>🎓 Aprender</button>
+                    <button onClick={() => { setTrainingMode(true); setSheetMode(false); stopSheet(); }} className="px-3 py-1.5 text-xs font-medium transition-colors" style={{ background:trainingMode?'rgba(212,176,106,.2)':'transparent', color:trainingMode?'#d4b06a':'#8a7d6c' }}>🎮 Treinar</button>
+                    <button onClick={() => { setSheetMode(true); setTrainingMode(false); stopTraining(); mpBroadStateRef.current?.({ type: 'sheet_mode', on: true }); }} className="px-3 py-1.5 text-xs font-medium transition-colors" style={{ background:sheetMode?'rgba(212,176,106,.2)':'transparent', color:sheetMode?'#d4b06a':'#8a7d6c' }}>🎼 Partitura</button>
                   </div>
 
                   {!trainingMode && !sheetMode && <>
@@ -2045,7 +2114,7 @@ export default function PianoMidi() {
                         <option value={1.0}>Velocidade 100%</option>
                         <option value={1.25}>Velocidade 125%</option>
                       </select>
-                      <button onClick={startTraining} className="px-4 py-2 rounded-full text-sm flex items-center gap-2 transition-all hover:scale-105" style={{ background:'linear-gradient(135deg,#f0a830,#c97e1a)', color:'#1a1108', fontWeight:600, boxShadow:'0 8px 20px -6px rgba(240,168,48,.5)' }}>
+                      <button onClick={startTraining} className="px-4 py-2 rounded-full text-sm flex items-center gap-2 transition-all hover:scale-105" style={{ background:'linear-gradient(135deg,#d4b06a,#a9823e)', color:'#1a1108', fontWeight:600, boxShadow:'0 8px 20px -6px rgba(212,176,106,.5)' }}>
                         <Target size={14}/> Iniciar
                       </button>
                     </div>
@@ -2056,7 +2125,7 @@ export default function PianoMidi() {
                     </button>
                   )}
                   {trainingMode && trainingState==='complete' && (
-                    <button onClick={startTraining} className="px-4 py-2 rounded-full text-sm flex items-center gap-2 hover:scale-105 transition-all" style={{ background:'linear-gradient(135deg,#f0a830,#c97e1a)', color:'#1a1108', fontWeight:600 }}>
+                    <button onClick={startTraining} className="px-4 py-2 rounded-full text-sm flex items-center gap-2 hover:scale-105 transition-all" style={{ background:'linear-gradient(135deg,#d4b06a,#a9823e)', color:'#1a1108', fontWeight:600 }}>
                       <RotateCcw size={14}/> Jogar de novo
                     </button>
                   )}
@@ -2070,7 +2139,7 @@ export default function PianoMidi() {
                         <option value={1.0}>Velocidade 100%</option>
                         <option value={1.25}>Velocidade 125%</option>
                       </select>
-                      <button onClick={async () => { await startSheet(); mpBroadStateRef.current?.({ type: 'sheet_start' }); }} className="px-4 py-2 rounded-full text-sm flex items-center gap-2 transition-all hover:scale-105" style={{ background:'linear-gradient(135deg,#f0a830,#c97e1a)', color:'#1a1108', fontWeight:600, boxShadow:'0 8px 20px -6px rgba(240,168,48,.5)' }}>
+                      <button onClick={async () => { await startSheet(); mpBroadStateRef.current?.({ type: 'sheet_start' }); }} className="px-4 py-2 rounded-full text-sm flex items-center gap-2 transition-all hover:scale-105" style={{ background:'linear-gradient(135deg,#d4b06a,#a9823e)', color:'#1a1108', fontWeight:600, boxShadow:'0 8px 20px -6px rgba(212,176,106,.5)' }}>
                         <Play size={14}/> Tocar
                       </button>
                     </div>
@@ -2081,7 +2150,7 @@ export default function PianoMidi() {
                     </button>
                   )}
                   {sheetMode && sheetState==='complete' && (
-                    <button onClick={async () => { await startSheet(); mpBroadStateRef.current?.({ type: 'sheet_start' }); }} className="px-4 py-2 rounded-full text-sm flex items-center gap-2 hover:scale-105 transition-all" style={{ background:'linear-gradient(135deg,#f0a830,#c97e1a)', color:'#1a1108', fontWeight:600 }}>
+                    <button onClick={async () => { await startSheet(); mpBroadStateRef.current?.({ type: 'sheet_start' }); }} className="px-4 py-2 rounded-full text-sm flex items-center gap-2 hover:scale-105 transition-all" style={{ background:'linear-gradient(135deg,#d4b06a,#a9823e)', color:'#1a1108', fontWeight:600 }}>
                       <RotateCcw size={14}/> Tocar de novo
                     </button>
                   )}
@@ -2093,7 +2162,7 @@ export default function PianoMidi() {
               {/* Training HUD — score during play */}
               {trainingMode && trainingState==='playing' && (
                 <div className="flex items-center gap-6 flex-wrap">
-                  <div className="text-center"><div className="text-2xl font-bold font-mono" style={{ color:'#f0a830' }}>{trainingScore.toLocaleString()}</div><div className="text-[10px] uppercase tracking-wider" style={{ color:'#6b6052' }}>Pontos</div></div>
+                  <div className="text-center"><div className="text-2xl font-bold font-mono" style={{ color:'#d4b06a' }}>{trainingScore.toLocaleString()}</div><div className="text-[10px] uppercase tracking-wider" style={{ color:'#6b6052' }}>Pontos</div></div>
                   <div className="text-center"><div className="text-2xl font-bold font-mono" style={{ color:trainingCombo>=10?'#9bd17e':'#e8dfd0' }}>×{trainingCombo}</div><div className="text-[10px] uppercase tracking-wider" style={{ color:'#6b6052' }}>Combo</div></div>
                   <div className="flex gap-4 text-sm flex-wrap">
                     <span style={{ color:'#9bd17e' }}>● {trainingHits.perfect} perfeito</span>
@@ -2108,7 +2177,7 @@ export default function PianoMidi() {
                 <div className="mt-2 p-4 rounded-xl celebrate-anim" style={{ background:'rgba(255,255,255,.03)', border:'1px solid rgba(255,255,255,.08)' }}>
                   <div className="flex flex-wrap items-center gap-6">
                     <div className="flex items-center gap-3">
-                      <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background:accuracy>=80?'linear-gradient(135deg,#9bd17e,#5a9d3e)':'linear-gradient(135deg,#f0a830,#c97e1a)', boxShadow:'0 8px 24px -6px rgba(155,209,126,.4)' }}>
+                      <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background:accuracy>=80?'linear-gradient(135deg,#9bd17e,#5a9d3e)':'linear-gradient(135deg,#d4b06a,#a9823e)', boxShadow:'0 8px 24px -6px rgba(155,209,126,.4)' }}>
                         {accuracy>=80 ? <Trophy size={28} style={{ color:'#0d2a07' }}/> : <Target size={28} style={{ color:'#1a1108' }}/>}
                       </div>
                       <div>
@@ -2117,7 +2186,7 @@ export default function PianoMidi() {
                       </div>
                     </div>
                     <div className="flex gap-5 flex-wrap">
-                      {[['Pontos', trainingScoreRef.current.toLocaleString(), '#f0a830'],['Combo Máx', trainingMaxCombo, '#9bd17e'],['Perfeitos', trainingHits.perfect, '#9bd17e'],['Bons', trainingHits.good, '#f0d060'],['Erros', trainingHits.miss, '#e07c5e']].map(([label,val,clr]) => (
+                      {[['Pontos', trainingScoreRef.current.toLocaleString(), '#d4b06a'],['Combo Máx', trainingMaxCombo, '#9bd17e'],['Perfeitos', trainingHits.perfect, '#9bd17e'],['Bons', trainingHits.good, '#f0d060'],['Erros', trainingHits.miss, '#e07c5e']].map(([label,val,clr]) => (
                         <div key={label} className="text-center"><div className="text-xl font-bold font-mono" style={{ color:clr }}>{val}</div><div className="text-[10px] uppercase tracking-wider" style={{ color:'#6b6052' }}>{label}</div></div>
                       ))}
                     </div>
@@ -2128,7 +2197,7 @@ export default function PianoMidi() {
               {/* Sheet HUD */}
               {sheetMode && sheetState==='playing' && (
                 <div className="flex items-center gap-6 flex-wrap">
-                  <div className="text-center"><div className="text-2xl font-bold font-mono" style={{ color:'#f0a830' }}>{sheetScore.toLocaleString()}</div><div className="text-[10px] uppercase tracking-wider" style={{ color:'#6b6052' }}>Pontos</div></div>
+                  <div className="text-center"><div className="text-2xl font-bold font-mono" style={{ color:'#d4b06a' }}>{sheetScore.toLocaleString()}</div><div className="text-[10px] uppercase tracking-wider" style={{ color:'#6b6052' }}>Pontos</div></div>
                   <div className="text-center"><div className="text-2xl font-bold font-mono" style={{ color:sheetCombo>=10?'#9bd17e':'#e8dfd0' }}>×{sheetCombo}</div><div className="text-[10px] uppercase tracking-wider" style={{ color:'#6b6052' }}>Combo</div></div>
                   <div className="flex gap-4 text-sm flex-wrap">
                     <span style={{ color:'#9bd17e' }}>● {sheetHits.perfect} perfeito</span>
@@ -2143,7 +2212,7 @@ export default function PianoMidi() {
                 <div className="mt-2 p-4 rounded-xl celebrate-anim" style={{ background:'rgba(255,255,255,.03)', border:'1px solid rgba(255,255,255,.08)' }}>
                   <div className="flex flex-wrap items-center gap-6">
                     <div className="flex items-center gap-3">
-                      <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background:sheetAccuracy>=80?'linear-gradient(135deg,#9bd17e,#5a9d3e)':'linear-gradient(135deg,#f0a830,#c97e1a)', boxShadow:'0 8px 24px -6px rgba(155,209,126,.4)' }}>
+                      <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background:sheetAccuracy>=80?'linear-gradient(135deg,#9bd17e,#5a9d3e)':'linear-gradient(135deg,#d4b06a,#a9823e)', boxShadow:'0 8px 24px -6px rgba(155,209,126,.4)' }}>
                         {sheetAccuracy>=80 ? <Trophy size={28} style={{ color:'#0d2a07' }}/> : <Target size={28} style={{ color:'#1a1108' }}/>}
                       </div>
                       <div>
@@ -2152,7 +2221,7 @@ export default function PianoMidi() {
                       </div>
                     </div>
                     <div className="flex gap-5 flex-wrap">
-                      {[['Pontos', sheetScoreRef.current.toLocaleString(), '#f0a830'],['Combo Máx', sheetMaxCombo, '#9bd17e'],['Perfeitos', sheetHits.perfect, '#9bd17e'],['Bons', sheetHits.good, '#f0d060'],['Erros', sheetHits.miss, '#e07c5e']].map(([label,val,clr]) => (
+                      {[['Pontos', sheetScoreRef.current.toLocaleString(), '#d4b06a'],['Combo Máx', sheetMaxCombo, '#9bd17e'],['Perfeitos', sheetHits.perfect, '#9bd17e'],['Bons', sheetHits.good, '#f0d060'],['Erros', sheetHits.miss, '#e07c5e']].map(([label,val,clr]) => (
                         <div key={label} className="text-center"><div className="text-xl font-bold font-mono" style={{ color:clr }}>{val}</div><div className="text-[10px] uppercase tracking-wider" style={{ color:'#6b6052' }}>{label}</div></div>
                       ))}
                     </div>
@@ -2164,7 +2233,7 @@ export default function PianoMidi() {
               {!trainingMode && !sheetMode && !songComplete && (
                 <>
                   <div className="h-1.5 rounded-full overflow-hidden mb-4" style={{ background:'rgba(255,255,255,.06)' }}>
-                    <div className="h-full transition-all duration-500" style={{ width:`${(currentNoteIndex/parsedSongNotes.length)*100}%`, background:'linear-gradient(90deg,#c97e1a,#f0a830)', boxShadow:'0 0 12px rgba(240,168,48,.5)' }}/>
+                    <div className="h-full transition-all duration-500" style={{ width:`${(currentNoteIndex/parsedSongNotes.length)*100}%`, background:'linear-gradient(90deg,#a9823e,#d4b06a)', boxShadow:'0 0 12px rgba(212,176,106,.5)' }}/>
                   </div>
                   <div className="flex items-center gap-2 overflow-x-auto pb-1">
                     {(() => {
@@ -2189,7 +2258,7 @@ export default function PianoMidi() {
                         const oct = noteObj.name.slice(-1);
                         const showOct = (displayToOctaves.get(dispName)?.size ?? 0) > 1;
                         return (
-                          <div key={`${noteObj.name}-${i}-${currentNoteIndex}`} className={`flex-shrink-0 rounded-xl flex flex-col items-center justify-center gap-0.5 transition-all ${isNext?'celebrate-anim':''}`} style={{ width:isNext?80:60, height:isNext?84:64, background:isNext?'linear-gradient(135deg,#f0a830,#c97e1a)':'rgba(255,255,255,.04)', border:isNext?'none':'1px solid rgba(255,255,255,.08)', color:noteColor, boxShadow:isNext?'0 8px 30px -6px rgba(240,168,48,.55)':'none', opacity:1-(i*.07) }}>
+                          <div key={`${noteObj.name}-${i}-${currentNoteIndex}`} className={`flex-shrink-0 rounded-xl flex flex-col items-center justify-center gap-0.5 transition-all ${isNext?'celebrate-anim':''}`} style={{ width:isNext?80:60, height:isNext?84:64, background:isNext?'linear-gradient(135deg,#d4b06a,#a9823e)':'rgba(255,255,255,.04)', border:isNext?'none':'1px solid rgba(255,255,255,.08)', color:noteColor, boxShadow:isNext?'0 8px 30px -6px rgba(212,176,106,.55)':'none', opacity:1-(i*.07) }}>
                             <NoteIcon dur={noteObj.dur} color={noteColor} size={isNext?16:12}/>
                             <div className={`display-font font-medium ${isNext?'text-lg':'text-sm'} leading-tight`}>
                               {dispName}{showOct && <sup style={{ fontSize:'0.6em', opacity:0.75 }}>{octaveSuper[oct]||oct}</sup>}
@@ -2216,11 +2285,22 @@ export default function PianoMidi() {
           </section>
         )}
 
-        {/* PIANO */}
-        <section className="max-w-6xl mx-auto">
-          <div className="rounded-2xl p-3 md:p-5" style={{ background:'linear-gradient(180deg,#2a1f17 0%,#1a130d 100%)', border:'1px solid rgba(255,255,255,.08)', boxShadow:'0 30px 80px -20px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.04)' }}>
-            <div className="h-2 rounded-full mb-3" style={{ background:'linear-gradient(180deg,#4a2418,#2a140d)', boxShadow:'inset 0 1px 2px rgba(0,0,0,.6)' }}/>
+        {/* PIANO — lacquered grand: control desk, staff/lanes, then fallboard and keys */}
+        <section className="instrument" id="piano" aria-label="Piano">
+          <div className="grand">
+            <InstrumentDeck
+              instruments={INSTRUMENTS}
+              instrumentId={instrumentId}
+              onInstrument={async id => { await ensureAudio(); setInstrumentId(id); }}
+              volume={volume} onVolume={setVolume}
+              reverb={reverbAmount} onReverb={setReverbAmount}
+              brightness={brightness} onBrightness={setBrightness}
+              sustain={sustain} onSustain={setSustain}
+              screen={<AudioVisualizer getAudioFrame={getAudioFrame} activeNotes={activeNotes}/>}
+            />
 
+            {/* Staff / falling lanes sit between the desk and the fallboard; empty when not in use. */}
+            <div className="grand__stage">
             {/* SHEET MUSIC STAFF */}
             {sheetMode && isSheet && (() => {
               const SL = STAFF_LINE_SPACING;
@@ -2242,14 +2322,14 @@ export default function PianoMidi() {
                     ))}
 
                     {/* Treble clef */}
-                    <text x="4" y={ST + SL*4 + 6} fill="rgba(240,168,48,0.75)"
+                    <text x="4" y={ST + SL*4 + 6} fill="rgba(212,176,106,0.75)"
                       fontSize={SL * 5.8} fontFamily="serif" style={{ userSelect:'none', pointerEvents:'none' }}>𝄞</text>
 
                     {/* Playhead — vertical amber line */}
-                    <line x1={PX} y1={ST - 20} x2={PX} y2={ST + SL*4 + 20} stroke="#f0a830" strokeWidth="2" opacity="0.9"/>
-                    <line x1={PX} y1={ST - 20} x2={PX} y2={ST + SL*4 + 20} stroke="#f0a830" strokeWidth="10" opacity="0.08"/>
+                    <line x1={PX} y1={ST - 20} x2={PX} y2={ST + SL*4 + 20} stroke="#d4b06a" strokeWidth="2" opacity="0.9"/>
+                    <line x1={PX} y1={ST - 20} x2={PX} y2={ST + SL*4 + 20} stroke="#d4b06a" strokeWidth="10" opacity="0.08"/>
                     {/* Playhead tick at bottom */}
-                    <polygon points={`${PX-5},${ST+SL*4+20} ${PX+5},${ST+SL*4+20} ${PX},${ST+SL*4+28}`} fill="#f0a830" opacity="0.7"/>
+                    <polygon points={`${PX-5},${ST+SL*4+20} ${PX+5},${ST+SL*4+20} ${PX},${ST+SL*4+28}`} fill="#d4b06a" opacity="0.7"/>
 
                     {/* Notes */}
                     {sheetNotes.map(note => {
@@ -2268,7 +2348,7 @@ export default function PianoMidi() {
                       const clr = note.hit === 'perfect' ? '#9bd17e'
                                 : note.hit === 'good'    ? '#f0d060'
                                 : note.hit === 'miss'    ? '#e07c5e66'
-                                : x < PX - 4            ? '#f0a830'  // passed playhead (unhit = approaching miss)
+                                : x < PX - 4            ? '#d4b06a'  // passed playhead (unhit = approaching miss)
                                 :                         '#f5efe8';  // upcoming
 
                       const stemX  = stemDn ? x - 5.5 : x + 5.5;
@@ -2327,8 +2407,8 @@ export default function PianoMidi() {
 
                     {/* Score & combo overlay */}
                     {sheetState === 'playing' && <>
-                      <text x="50" y={ST - 8} fill="#f0a830" fontSize="13" fontFamily="monospace" fontWeight="bold">{sheetScore.toLocaleString()}</text>
-                      {sheetCombo >= 5 && <text x={PX + 16} y={ST - 8} fill={sheetCombo>=20?'#9bd17e':'#f0a830'} fontSize="12" fontFamily="monospace" fontWeight="bold">×{sheetCombo} combo</text>}
+                      <text x="50" y={ST - 8} fill="#d4b06a" fontSize="13" fontFamily="monospace" fontWeight="bold">{sheetScore.toLocaleString()}</text>
+                      {sheetCombo >= 5 && <text x={PX + 16} y={ST - 8} fill={sheetCombo>=20?'#9bd17e':'#d4b06a'} fontSize="12" fontFamily="monospace" fontWeight="bold">×{sheetCombo} combo</text>}
                     </>}
                   </svg>
 
@@ -2342,12 +2422,12 @@ export default function PianoMidi() {
                   {/* Countdown */}
                   {sheetState === 'countdown' && sheetCdown != null && (
                     <div style={{ position:'absolute', inset:0, background:'rgba(0,0,0,.65)', zIndex:20, display:'flex', alignItems:'center', justifyContent:'center' }}>
-                      <div key={sheetCdown} className="cd-num display-font" style={{ fontSize:72, color:'#f0a830', fontWeight:700, textShadow:'0 0 40px rgba(240,168,48,.9)' }}>{sheetCdown}</div>
+                      <div key={sheetCdown} className="cd-num display-font" style={{ fontSize:72, color:'#d4b06a', fontWeight:700, textShadow:'0 0 40px rgba(212,176,106,.9)' }}>{sheetCdown}</div>
                     </div>
                   )}
 
                   {/* Label bar at bottom */}
-                  <div style={{ position:'absolute', bottom:0, left:0, right:0, height:8, background:'linear-gradient(to top,rgba(240,168,48,.05),transparent)', pointerEvents:'none' }}/>
+                  <div style={{ position:'absolute', bottom:0, left:0, right:0, height:8, background:'linear-gradient(to top,rgba(212,176,106,.05),transparent)', pointerEvents:'none' }}/>
                 </div>
               );
             })()}
@@ -2368,7 +2448,7 @@ export default function PianoMidi() {
                 {/* Note blocks — no auto-sound, only player touch triggers sound */}
                 {displayNotes.map(note => {
                   const hitClr = note.hit==='perfect'?'#9bd17e':note.hit==='good'?'#f0d060':note.hit==='miss'?'#e07c5e':null;
-                  const base   = note.isBlack?'#c97e1a':'#f0a830';
+                  const base   = note.isBlack?'#a9823e':'#d4b06a';
                   const clr    = hitClr || base;
                   const iconColor = note.isBlack ? '#1a1108' : '#1a1108';
                   return (
@@ -2395,13 +2475,13 @@ export default function PianoMidi() {
                 })}
 
                 {/* Hit zone glow bar */}
-                <div className="hz-bar" style={{ position:'absolute', bottom:0, left:0, right:0, height:3, background:'linear-gradient(90deg,transparent,#f0a830 20%,#f0a830 80%,transparent)', zIndex:10 }}/>
-                <div style={{ position:'absolute', bottom:0, left:0, right:0, height:40, background:'linear-gradient(to top,rgba(240,168,48,.07),transparent)', zIndex:9, pointerEvents:'none' }}/>
+                <div className="hz-bar" style={{ position:'absolute', bottom:0, left:0, right:0, height:3, background:'linear-gradient(90deg,transparent,#d4b06a 20%,#d4b06a 80%,transparent)', zIndex:10 }}/>
+                <div style={{ position:'absolute', bottom:0, left:0, right:0, height:40, background:'linear-gradient(to top,rgba(212,176,106,.07),transparent)', zIndex:9, pointerEvents:'none' }}/>
 
                 {/* Score + combo overlay */}
                 {trainingState==='playing' && <>
-                  <div style={{ position:'absolute', top:10, left:12, zIndex:15, fontFamily:'monospace', fontSize:18, fontWeight:700, color:'#f0a830', textShadow:'0 0 12px rgba(240,168,48,.6)' }}>{trainingScore.toLocaleString()}</div>
-                  {trainingCombo>=5 && <div style={{ position:'absolute', top:10, right:12, zIndex:15, fontSize:13, fontWeight:700, color:trainingCombo>=20?'#9bd17e':'#f0a830', textShadow:'0 0 10px currentColor' }}><Zap size={12} style={{ display:'inline', verticalAlign:'middle', marginRight:3 }}/>×{trainingCombo} combo</div>}
+                  <div style={{ position:'absolute', top:10, left:12, zIndex:15, fontFamily:'monospace', fontSize:18, fontWeight:700, color:'#d4b06a', textShadow:'0 0 12px rgba(212,176,106,.6)' }}>{trainingScore.toLocaleString()}</div>
+                  {trainingCombo>=5 && <div style={{ position:'absolute', top:10, right:12, zIndex:15, fontSize:13, fontWeight:700, color:trainingCombo>=20?'#9bd17e':'#d4b06a', textShadow:'0 0 10px currentColor' }}><Zap size={12} style={{ display:'inline', verticalAlign:'middle', marginRight:3 }}/>×{trainingCombo} combo</div>}
                 </>}
 
                 {/* Hit feedback */}
@@ -2414,125 +2494,54 @@ export default function PianoMidi() {
                 {/* Countdown */}
                 {trainingState==='countdown' && countdownNum!=null && (
                   <div style={{ position:'absolute', inset:0, background:'rgba(0,0,0,.65)', zIndex:20, display:'flex', alignItems:'center', justifyContent:'center' }}>
-                    <div key={countdownNum} className="cd-num display-font" style={{ fontSize:100, color:'#f0a830', fontWeight:700, textShadow:'0 0 40px rgba(240,168,48,.9)' }}>{countdownNum}</div>
+                    <div key={countdownNum} className="cd-num display-font" style={{ fontSize:100, color:'#d4b06a', fontWeight:700, textShadow:'0 0 40px rgba(212,176,106,.9)' }}>{countdownNum}</div>
                   </div>
                 )}
               </div>
             )}
 
-            {/* PIANO KEYBOARD */}
-            <div className="relative w-full select-none" style={{ height:220 }}>
-              <div className="absolute inset-0 flex gap-[2px]">
-                {WHITE_KEYS.map(note => {
-                  const isActive   = activeNotes.has(note.name);
-                  const isExpected = sheetMode ? (sheetExpectedNote===note.name) : (expectedNote===note.name);
-                  const remotePressing = remoteNoteDisplay.get(note.name) || [];
-                  const pressColor = (isActive && mpInRoom) ? mpMeRef.current.color : (remotePressing.length > 0 ? remotePressing[0].color : null);
-                  const pressGrad  = pressColor ? `linear-gradient(180deg,${lightenColor(pressColor)},${pressColor})` : null;
-                  const isPressed  = isActive || remotePressing.length > 0;
-                  return (
-                    <button key={note.name} onPointerDown={handlePianoPointerDown(note.name)} onPointerUp={handlePianoPointerEnd} onPointerCancel={handlePianoPointerEnd} onPointerLeave={handlePianoPointerEnd}
-                      className={`flex-1 relative rounded-b-md key-press-anim flex flex-col items-center justify-end pb-3 ${isExpected?'lesson-glow':''}`}
-                      style={{ overflow:'visible', background:pressGrad??(isActive?'linear-gradient(180deg,#ffd991,#f0a830)':isExpected?'linear-gradient(180deg,#fff7e0,#f5d98a)':'linear-gradient(180deg,#f8f2e6,#e8ddc8)'), boxShadow:pressColor?`inset 0 4px 8px rgba(0,0,0,.15),0 0 14px ${pressColor}66`:(isPressed?'inset 0 4px 8px rgba(0,0,0,.15),0 1px 0 rgba(255,255,255,.5)':'0 2px 0 rgba(0,0,0,.4),inset 0 -2px 8px rgba(0,0,0,.08)'), transform:isActive?'translateY(2px)':'translateY(0)', cursor:'pointer', border:'none', touchAction:'none' }}>
-                      {/* Free mode: floating label */}
-                      {freeMode && freeFloats.filter(f => f.noteName===note.name).map(f => (
-                        <span key={f.id} className="free-float" style={{ fontSize:13, color:pressColor||'#f0a830', textShadow:`0 0 10px currentColor` }}>
-                          {labelLang==='pt'?note.pt:note.en}
-                        </span>
-                      ))}
-                      {/* Free mode: click count */}
-                      {freeMode && (keyClickCounts.get(note.name)||0)>0 && (
-                        <div style={{ position:'absolute', top:6, right:3, background:'rgba(0,0,0,.6)', color:'#f0a830', borderRadius:8, fontSize:9, padding:'1px 4px', fontWeight:700, zIndex:10, lineHeight:1.4, pointerEvents:'none' }}>
-                          {keyClickCounts.get(note.name)}
-                        </div>
-                      )}
-                      {showLabels && <span className="display-font text-xs md:text-sm font-medium pointer-events-none" style={{ color:pressColor?'#fff':(isActive||isExpected?'#5a3a0a':'#7a6850') }}>{labelLang==='pt'?note.pt:note.en}</span>}
-                      {showKeyboardHints && <span className="text-[9px] mt-1 px-1.5 py-0.5 rounded font-mono pointer-events-none" style={{ background:isPressed?'rgba(255,255,255,.5)':'rgba(0,0,0,.06)', color:isPressed?'#5a3a0a':'#9a8870' }}>{note.key.toUpperCase()}</span>}
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="absolute inset-0 pointer-events-none">
-                {BLACK_KEYS.map(note => {
-                  const isActive   = activeNotes.has(note.name);
-                  const isExpected = sheetMode ? (sheetExpectedNote===note.name) : (expectedNote===note.name);
-                  const remotePressing = remoteNoteDisplay.get(note.name) || [];
-                  const pressColor = (isActive && mpInRoom) ? mpMeRef.current.color : (remotePressing.length > 0 ? remotePressing[0].color : null);
-                  const pressGrad  = pressColor ? `linear-gradient(180deg,${lightenColor(pressColor)},${pressColor})` : null;
-                  const isPressed  = isActive || remotePressing.length > 0;
-                  return (
-                    <button key={note.name} onPointerDown={handlePianoPointerDown(note.name)} onPointerUp={handlePianoPointerEnd} onPointerCancel={handlePianoPointerEnd} onPointerLeave={handlePianoPointerEnd}
-                      className={`absolute rounded-b-md key-press-anim flex flex-col items-center justify-end pb-2 pointer-events-auto ${isExpected?'lesson-glow':''}`}
-                      style={{ left:`${BLACK_KEY_LEFTS.get(note.name)}%`, width:`${WHITE_KEY_WIDTH*.6}%`, height:'62%', top:0, overflow:'visible', background:pressGrad??(isActive?'linear-gradient(180deg,#f0a830,#c97e1a)':isExpected?'linear-gradient(180deg,#d4a04a,#8a5a14)':'linear-gradient(180deg,#2a201a,#14100c)'), boxShadow:pressColor?`inset 0 4px 8px rgba(0,0,0,.3),0 0 14px ${pressColor}88`:(isPressed?'inset 0 4px 8px rgba(0,0,0,.3)':'0 3px 0 rgba(0,0,0,.7),inset 0 -3px 4px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.1)'), transform:isActive?'translateY(2px)':'translateY(0)', cursor:'pointer', border:'none', zIndex:2, touchAction:'none' }}>
-                      {/* Free mode: floating label */}
-                      {freeMode && freeFloats.filter(f => f.noteName===note.name).map(f => (
-                        <span key={f.id} className="free-float" style={{ fontSize:11, color:pressColor||'#f0a830', textShadow:`0 0 10px currentColor` }}>
-                          {labelLang==='pt'?note.pt:note.en}
-                        </span>
-                      ))}
-                      {/* Free mode: click count */}
-                      {freeMode && (keyClickCounts.get(note.name)||0)>0 && (
-                        <div style={{ position:'absolute', top:4, right:2, background:'rgba(0,0,0,.75)', color:'#f0a830', borderRadius:6, fontSize:8, padding:'0 3px', fontWeight:700, zIndex:10, lineHeight:1.5, pointerEvents:'none' }}>
-                          {keyClickCounts.get(note.name)}
-                        </div>
-                      )}
-                      {showLabels && <span className="display-font text-[10px] font-medium pointer-events-none" style={{ color:pressColor?'#fff':(isPressed?'#1a1108':'#a89a87') }}>{labelLang==='pt'?note.pt:note.en}</span>}
-                      {showKeyboardHints && <span className="text-[8px] mt-0.5 px-1 py-0 rounded font-mono pointer-events-none" style={{ background:'rgba(255,255,255,.1)', color:isPressed?'#1a1108':'#c9b89a' }}>{note.key.toUpperCase()}</span>}
-                    </button>
-                  );
-                })}
-              </div>
             </div>
+
+            <GrandCase>
+              <GrandKeyboard
+                whiteKeys={WHITE_KEYS} blackKeys={BLACK_KEYS}
+                blackLeft={note => BLACK_KEY_LEFTS.get(note.name)} blackWidth={WHITE_KEY_WIDTH*.6}
+                keyState={note => {
+                  const isActive = activeNotes.has(note.name);
+                  const remotePressing = remoteNoteDisplay.get(note.name) || [];
+                  const pressed = isActive || remotePressing.length > 0;
+                  return {
+                    pressed, lit: pressed,
+                    // Multiplayer keeps each musician's color; solo play lights keys in gold.
+                    tint: (isActive && mpInRoom) ? mpMeRef.current.color : (remotePressing[0]?.color ?? null),
+                    expected: sheetMode ? sheetExpectedNote===note.name : expectedNote===note.name,
+                  };
+                }}
+                handlersFor={note => ({ onPointerDown: handlePianoPointerDown(note.name), onPointerUp: handlePianoPointerEnd, onPointerCancel: handlePianoPointerEnd, onPointerLeave: handlePianoPointerEnd })}
+                showLabels={showLabels} showHints={showKeyboardHints} labelLang={labelLang}
+              />
+            </GrandCase>
           </div>
 
-          {/* CONTROLS */}
-          <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-4 flex-wrap">
-              <div className="flex items-center gap-3 px-4 py-2 rounded-full" style={{ background:'rgba(255,255,255,.03)', border:'1px solid rgba(255,255,255,.06)' }}>
-                <Volume2 size={16} style={{ color:'#a89a87' }}/>
-                <input type="range" min="0" max="100" value={volume*100} onChange={e => setVolume(e.target.value/100)} className="w-24" style={{ accentColor:'#f0a830' }}/>
-                <span className="text-xs font-mono w-8" style={{ color:'#8a7d6c' }}>{Math.round(volume*100)}</span>
-              </div>
-              {/* Instrument selector */}
-              <div className="flex items-center gap-1 px-2 py-1 rounded-full overflow-x-auto" style={{ background:'rgba(255,255,255,.03)', border:'1px solid rgba(255,255,255,.06)', scrollbarWidth:'none', flexShrink:0 }}>
-                {INSTRUMENTS.map(inst => (
-                  <button key={inst.id} onClick={async () => { await ensureAudio(); setInstrumentId(inst.id); }}
-                    className="px-2 py-0.5 rounded-full text-xs whitespace-nowrap transition-colors"
-                    style={{ background:instrumentId===inst.id?'rgba(240,168,48,.2)':'transparent', color:instrumentId===inst.id?'#f0a830':'#8a7d6c', fontWeight:instrumentId===inst.id?600:400, border:'none', cursor:'pointer' }}>
-                    {inst.label}
-                  </button>
-                ))}
-              </div>
-              <button onClick={() => setShowLabels(!showLabels)} className="px-3 py-2 rounded-full text-xs flex items-center gap-2 transition-colors" style={{ background:showLabels?'rgba(240,168,48,.15)':'rgba(255,255,255,.03)', border:`1px solid ${showLabels?'rgba(240,168,48,.3)':'rgba(255,255,255,.06)'}`, color:showLabels?'#f0a830':'#a89a87' }}>
-                <Music size={12}/> Notas
-              </button>
-              <button onClick={() => setShowKeyboardHints(!showKeyboardHints)} className="px-3 py-2 rounded-full text-xs flex items-center gap-2 transition-colors" style={{ background:showKeyboardHints?'rgba(240,168,48,.15)':'rgba(255,255,255,.03)', border:`1px solid ${showKeyboardHints?'rgba(240,168,48,.3)':'rgba(255,255,255,.06)'}`, color:showKeyboardHints?'#f0a830':'#a89a87' }}>
-                <Keyboard size={12}/> Teclas PC
-              </button>
-              <button onClick={() => setLabelLang(labelLang==='pt'?'en':'pt')} className="px-3 py-2 rounded-full text-xs transition-colors" style={{ background:'rgba(255,255,255,.03)', border:'1px solid rgba(255,255,255,.06)', color:'#a89a87' }}>
-                {labelLang==='pt'?'Dó Ré Mi':'C D E'}
-              </button>
-              <button onClick={() => { setFreeMode(true); }} className="px-3 py-2 rounded-full text-xs flex items-center gap-2 transition-colors" style={{ background:'rgba(155,209,126,.15)', border:'1px solid rgba(155,209,126,.3)', color:'#9bd17e' }}>
-                <Sparkles size={12}/> Modo Livre
-              </button>
+          <KeyboardToolbar
+            labels={showLabels} onLabels={() => setShowLabels(v => !v)}
+            hints={showKeyboardHints} onHints={() => setShowKeyboardHints(v => !v)}
+            labelLang={labelLang} onLanguage={() => setLabelLang(l => l==='pt'?'en':'pt')}
+            onFreeMode={() => setFreeMode(true)}
+          />
+          {audioError && (
+            <div role="alert" className="mt-3 flex items-center gap-2 px-4 py-2 rounded-xl text-xs" style={{ background:'rgba(224,124,94,.08)', border:'1px solid rgba(224,124,94,.25)', color:'#e8a58f' }}>
+              <AlertCircle size={14}/> {audioError}
             </div>
-            <div className="flex items-center gap-3 text-xs" style={{ color:'#8a7d6c' }}>
-              <span className="hidden md:inline">Entrada:</span>
-              <span className="flex items-center gap-1.5"><Usb size={12}/> MIDI</span>
-              <span className="opacity-30">·</span>
-              <span className="flex items-center gap-1.5"><Keyboard size={12}/> Teclado</span>
-              <span className="opacity-30">·</span>
-              <span>👆 Toque</span>
-            </div>
-          </div>
+          )}
         </section>
 
         {/* MIDI notice */}
         {(midiStatus==='no-devices'||midiStatus==='denied'||midiStatus==='unsupported') && (
-          <section className="max-w-6xl mx-auto mt-8 fade-in">
-            <div className="rounded-2xl p-5 flex items-start gap-3" style={{ background:'rgba(224,124,94,.06)', border:'1px solid rgba(224,124,94,.2)' }}>
-              <AlertCircle size={18} style={{ color:'#e8a06a', flexShrink:0, marginTop:2 }}/>
-              <div className="text-sm" style={{ color:'#d4b89a' }}>
+          <section className="max-w-6xl mx-auto mt-4 fade-in">
+            <div className="rounded-xl px-4 py-3 flex items-start gap-2.5" style={{ background:'rgba(224,124,94,.05)', border:'1px solid rgba(224,124,94,.16)' }}>
+              <AlertCircle size={15} style={{ color:'#e8a06a', flexShrink:0, marginTop:2 }}/>
+              <div className="text-[13px]" style={{ color:'#bfa68a' }}>
                 {midiStatus==='no-devices' && <><strong style={{ color:'#f5efe6' }}>Nenhum teclado MIDI detectado.</strong> Conecte via USB; o navegador detecta automaticamente.</>}
                 {midiStatus==='denied'     && <><strong style={{ color:'#f5efe6' }}>Permissão MIDI negada.</strong> Recarregue e permita o acesso.</>}
                 {midiStatus==='unsupported'&& <><strong style={{ color:'#f5efe6' }}>MIDI indisponível neste navegador.</strong> Use Chrome, Edge ou Opera. O teclado do computador e o clique nas teclas funcionam normalmente.</>}
@@ -2541,24 +2550,9 @@ export default function PianoMidi() {
           </section>
         )}
 
-        {/* HOW IT WORKS */}
-        <section className="max-w-6xl mx-auto mt-12 grid md:grid-cols-5 gap-4">
-          {[
-            { icon:Usb,      title:'Teclado MIDI',  desc:'Conecte qualquer teclado MIDI USB. Detectado automaticamente pelo navegador.' },
-            { icon:Keyboard, title:'Teclado do PC',  desc:'Z X C V B N M (graves) e Q W E R T Y U I (agudas). Pretas: S D G H J / 2 3 5 6 7.' },
-            { icon:BookOpen, title:'Modo Aprender',  desc:'A próxima nota brilha em âmbar até você acertar. Progressão sem pressão de tempo.' },
-            { icon:Target,   title:'Modo Treino',    desc:'Notas caem como Guitar Hero. Pressione na hora certa — o som vem só do SEU toque.' },
-            { icon:Music,    title:'Modo Partitura', desc:'Pauta musical rola em tempo real. Toque cada nota quando cruzar a linha dourada — valida nota e ritmo.' },
-          ].map((item,i) => (
-            <div key={i} className="rounded-2xl p-5 fade-in" style={{ background:'rgba(255,255,255,.02)', border:'1px solid rgba(255,255,255,.05)', animationDelay:`${.1*(i+1)}s` }}>
-              <div className="w-10 h-10 rounded-lg flex items-center justify-center mb-3" style={{ background:'rgba(240,168,48,.12)', border:'1px solid rgba(240,168,48,.2)' }}>
-                <item.icon size={18} style={{ color:'#f0a830' }}/>
-              </div>
-              <div className="display-font text-lg mb-1" style={{ color:'#f5efe6' }}>{item.title}</div>
-              <div className="text-sm leading-relaxed" style={{ color:'#a89a87' }}>{item.desc}</div>
-            </div>
-          ))}
-        </section>
+        <ModesSection onLibrary={() => setShowSongList(true)} onFreeMode={() => setFreeMode(true)}/>
+        <LiveBand onRoom={() => setMpOpen(true)} inRoom={mpInRoom} roomCode={mpCode}/>
+        <StudioFooter songCount={SONGS.length}/>
       </main>
 
       {/* SONG LIST MODAL */}
@@ -2567,31 +2561,38 @@ export default function PianoMidi() {
           <div className="w-full max-w-2xl rounded-2xl p-6 fade-in max-h-[85vh] overflow-y-auto" style={{ background:'linear-gradient(180deg,#1a1410,#0f0c08)', border:'1px solid rgba(255,255,255,.1)', boxShadow:'0 40px 100px -20px rgba(0,0,0,.8)' }} onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-5">
               <div>
-                <div className="text-xs tracking-[.2em] uppercase mb-1" style={{ color:'#c97e1a' }}>Repertório</div>
+                <div className="text-xs tracking-[.2em] uppercase mb-1" style={{ color:'#a9823e' }}>Repertório</div>
                 <h3 className="display-font text-2xl" style={{ color:'#f5efe6' }}>Escolha uma música</h3>
               </div>
-              <button onClick={() => setShowSongList(false)} className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background:'rgba(255,255,255,.05)', border:'1px solid rgba(255,255,255,.08)', color:'#a89a87' }}><X size={16}/></button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => { midiImportTargetRef.current = 'main'; midiInputRef.current?.click(); }} className="h-9 px-4 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[.16em] transition-colors" style={{ color:'#ecd49c', background:'rgba(212,176,106,.06)', border:'1px solid rgba(212,176,106,.45)', borderRadius:2 }}>
+                  <Upload size={14}/> Importar MIDI
+                </button>
+                <button onClick={() => setShowSongList(false)} aria-label="Fechar repertório" className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background:'rgba(255,255,255,.05)', border:'1px solid rgba(255,255,255,.08)', color:'#a89a87' }}><X size={16}/></button>
+              </div>
             </div>
             <div className="space-y-2">
               {/* Músicas criadas pelo usuário */}
               {customSongs.length > 0 && (
                 <>
                   <div className="text-xs uppercase tracking-[.18em] px-1 pb-1 pt-2 flex items-center justify-between" style={{ color:'#9bd17e' }}>
-                    <span>✏️ Suas criações ({customSongs.length})</span>
+                    <span>Suas músicas ({customSongs.length})</span>
                     <button onClick={() => { if (window.confirm('Remover todas as músicas criadas?')) { setCustomSongs([]); try { localStorage.removeItem('allegretto-custom-songs'); } catch(e2) {} } }} style={{ color:'rgba(224,124,94,.6)', fontSize:10, background:'none', border:'none', cursor:'pointer' }}>Remover todas</button>
                   </div>
                   {customSongs.map(song => {
                     const beats = song.notes.reduce((s,n)=>s+(Array.isArray(n)?n[1]:1),0);
                     const secs  = Math.round(beats / (song.bpm / 60));
                     return (
-                      <button key={song.id} onClick={() => selectSong(song)} className="w-full p-4 rounded-xl text-left transition-all hover:scale-[1.01] flex items-center justify-between group" style={{ background:currentSong?.id===song.id?'rgba(155,209,126,.1)':'rgba(155,209,126,.03)', border:`1px solid ${currentSong?.id===song.id?'rgba(155,209,126,.35)':'rgba(155,209,126,.12)'}` }}>
+                      <button key={song.id} onClick={() => pickSong(song)} className="w-full p-4 rounded-xl text-left transition-all hover:scale-[1.01] flex items-center justify-between group" style={{ background:currentSong?.id===song.id?'rgba(155,209,126,.1)':'rgba(155,209,126,.03)', border:`1px solid ${currentSong?.id===song.id?'rgba(155,209,126,.35)':'rgba(155,209,126,.12)'}` }}>
                         <div>
                           <div className="display-font text-lg" style={{ color:'#f5efe6' }}>{song.title}</div>
                           <div className="text-xs mt-0.5" style={{ color:'#8a7d6c' }}>{song.artist} · {song.notes.length} notas · ~{secs}s</div>
                         </div>
                         <div className="flex items-center gap-3">
                           {song.timeSignature && <span className="display-font" style={{ fontSize:11, color:'#9bd17e', background:'rgba(155,209,126,.1)', border:'1px solid rgba(155,209,126,.2)', borderRadius:4, padding:'1px 6px' }}>{song.timeSignature}</span>}
-                          <span style={{ fontSize:10, color:'#9bd17e', opacity:.7 }}>✏️</span>
+                          {song.source === 'midi'
+                            ? <span style={{ fontSize:9, fontWeight:600, letterSpacing:'.14em', color:'#ecd49c', border:'1px solid rgba(212,176,106,.35)', borderRadius:2, padding:'1px 5px' }}>MIDI</span>
+                            : <span style={{ fontSize:10, color:'#9bd17e', opacity:.7 }}>✏️</span>}
                           <ChevronRight size={16} style={{ color:'#8a7d6c' }} className="group-hover:translate-x-1 transition-transform"/>
                         </div>
                       </button>
@@ -2605,16 +2606,16 @@ export default function PianoMidi() {
                 const beats = songBeats(song);
                 const secs  = Math.round(beats / (song.bpm / 60));
                 return (
-                  <button key={song.id} onClick={() => selectSong(song)} className="w-full p-4 rounded-xl text-left transition-all hover:scale-[1.01] flex items-center justify-between group" style={{ background:currentSong?.id===song.id?'rgba(240,168,48,.1)':'rgba(255,255,255,.03)', border:`1px solid ${currentSong?.id===song.id?'rgba(240,168,48,.3)':'rgba(255,255,255,.06)'}` }}>
+                  <button key={song.id} onClick={() => pickSong(song)} className="w-full p-4 rounded-xl text-left transition-all hover:scale-[1.01] flex items-center justify-between group" style={{ background:currentSong?.id===song.id?'rgba(212,176,106,.1)':'rgba(255,255,255,.03)', border:`1px solid ${currentSong?.id===song.id?'rgba(212,176,106,.3)':'rgba(255,255,255,.06)'}` }}>
                     <div>
                       <div className="display-font text-lg" style={{ color:'#f5efe6' }}>{song.title}</div>
                       <div className="text-xs mt-0.5" style={{ color:'#8a7d6c' }}>{song.artist} · {song.notes.length} notas · ~{secs}s</div>
                     </div>
                     <div className="flex items-center gap-3">
                       {song.timeSignature && (
-                        <span className="display-font" style={{ fontSize:11, color:'#f0a830', background:'rgba(240,168,48,.1)', border:'1px solid rgba(240,168,48,.2)', borderRadius:4, padding:'1px 6px', letterSpacing:0 }}>{song.timeSignature}</span>
+                        <span className="display-font" style={{ fontSize:11, color:'#d4b06a', background:'rgba(212,176,106,.1)', border:'1px solid rgba(212,176,106,.2)', borderRadius:4, padding:'1px 6px', letterSpacing:0 }}>{song.timeSignature}</span>
                       )}
-                      <div className="flex gap-0.5">{[1,2,3].map(l => <div key={l} className="w-1.5 h-1.5 rounded-full" style={{ background:l<=song.difficulty?'#f0a830':'rgba(255,255,255,.1)' }}/>)}</div>
+                      <div className="flex gap-0.5">{[1,2,3].map(l => <div key={l} className="w-1.5 h-1.5 rounded-full" style={{ background:l<=song.difficulty?'#d4b06a':'rgba(255,255,255,.1)' }}/>)}</div>
                       <ChevronRight size={16} style={{ color:'#8a7d6c' }} className="group-hover:translate-x-1 transition-transform"/>
                     </div>
                   </button>
@@ -2625,50 +2626,72 @@ export default function PianoMidi() {
         </div>
       )}
 
-      <footer className="px-6 md:px-10 py-6 text-center text-xs" style={{ color:'#6b6052', borderTop:'1px solid rgba(255,255,255,.04)' }}>
-        Allegretto · Piano virtual com Web MIDI API · {SONGS.length} músicas · Aprender · Treino · Partitura · Multiplayer
-      </footer>
+
+      <input ref={midiInputRef} type="file" accept=".mid,.midi,audio/midi,audio/x-midi" onChange={handleMidiFile} className="hidden"/>
+      {freePickerOpen && (
+        <FreeSongPicker
+          songs={SONGS}
+          customSongs={customSongs}
+          inRoom={mpInRoom}
+          onPick={loadSongIntoFree}
+          onImport={() => { midiImportTargetRef.current = 'free'; midiInputRef.current?.click(); }}
+          onClose={() => setFreePickerOpen(false)}
+        />
+      )}
+      {midiImport && (
+        <MidiImportDialog
+          key={midiImport.song?.id ?? 'error'}
+          result={midiImport}
+          onConfirm={confirmMidiImport}
+          onCancel={() => { setMidiImport(null); midiImportTargetRef.current = 'main'; }}
+          onRetry={() => { setMidiImport(null); midiInputRef.current?.click(); }}
+        />
+      )}
 
       {/* ── MODO LIVRE — tela dedicada ── */}
       {freeMode && (
-        <div className="fixed inset-0 z-40 flex flex-col" style={{ background:'#06060e' }}>
+        <div className="free-mode fixed inset-0 z-40 flex flex-col">
           {/* Header */}
-          <div className="flex items-center justify-between px-5 py-3 flex-shrink-0" style={{ borderBottom:'1px solid rgba(255,255,255,.06)' }}>
-            <div className="flex items-center gap-3">
+          <div className="free-header">
+            <div className="free-header__left">
               <button onClick={() => {
-                if (composerMode) { stopComposer(); setComposerSaved(false); setComposerMode(false); mpBroadStateRef.current?.({ type: 'composer_exit' }); }
-                else { setFreeMode(false); if(risingRafRef.current){clearTimeout(risingRafRef.current);risingRafRef.current=null;} risingBarsRef.current=[]; setRisingBars([]); setKeyClickCounts(new Map()); }
-              }} className="w-8 h-8 rounded-full flex items-center justify-center transition-colors hover:scale-105" style={{ background:'rgba(255,255,255,.07)', border:'1px solid rgba(255,255,255,.12)', color:'#a89a87' }}>
-                <X size={14}/>
+                if (composerMode) { stopComposer(); stopFollow(); setComposerSaved(false); setComposerMode(false); setFreeSong(null); mpBroadStateRef.current?.({ type: 'composer_exit' }); }
+                else { setFreeMode(false); risingBarsRef.current=[]; setKeyClickCounts(new Map()); }
+              }} aria-label={composerMode ? 'Sair do compositor' : 'Sair do Modo Livre'} className="free-close">
+                <X size={15}/>
               </button>
-              <span className="display-font text-xl" style={{ color:'#f5efe6' }}>
-                {composerSaved ? '🎼 Partitura' : composerMode ? 'Criar Partitura' : 'Modo Livre'}
-              </span>
+              <div className="free-title">
+                <span className="free-title__eyebrow">{composerSaved ? (freeSong ? 'NO PALCO' : 'SUA PARTITURA') : composerMode ? 'COMPOSITOR' : 'PALCO ABERTO'}</span>
+                <span className="free-title__name">{composerSaved ? (freeSong?.title || 'Partitura') : composerMode ? (freeSong ? `Editando ${freeSong.title}` : 'Criar Partitura') : 'Modo Livre'}</span>
+              </div>
               {!composerMode && mpInRoom && (
-                <span className="text-xs px-2 py-0.5 rounded-full flex items-center gap-1.5" style={{ background:'rgba(155,209,126,.12)', color:'#9bd17e', border:'1px solid rgba(155,209,126,.25)' }}>
-                  <span className="w-1.5 h-1.5 rounded-full inline-block animate-ping" style={{background:'#9bd17e'}}/>
-                  {mpCode} · {mpMembers.length} músicos
-                </span>
+                <span className="free-room"><span className="live-dot" aria-hidden="true"/>{mpCode} · {mpMembers.length} músicos</span>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            {!composerMode && freeTotal > 0 && (
+              <dl className="free-stats">
+                <div><dt>Notas</dt><dd>{freeTotal}</dd></div>
+                {freeTop && <div><dt>Mais tocada</dt><dd>{labelLang==='pt'?freeTop.pt:freeTop.en}</dd></div>}
+              </dl>
+            )}
+            <div className="free-header__actions">
               {composerMode && !composerSaved ? (
                 <>
                   {/* BPM */}
                   <div className="flex items-center gap-1.5" style={{ background:'rgba(255,255,255,.05)', border:'1px solid rgba(255,255,255,.08)', borderRadius:8, padding:'4px 8px' }}>
                     <span style={{ color:'#6b6052', fontSize:10 }}>BPM</span>
                     <input type="number" min={40} max={240} value={composerBpm} onChange={e => { const b=Math.max(40,Math.min(240,Number(e.target.value))); setComposerBpm(b); mpBroadStateRef.current?.({ type:'composer_bpm', bpm:b }); }}
-                      style={{ width:40, background:'transparent', border:'none', outline:'none', color:'#f0a830', fontSize:13, fontWeight:700, textAlign:'center' }}/>
+                      style={{ width:40, background:'transparent', border:'none', outline:'none', color:'#d4b06a', fontSize:13, fontWeight:700, textAlign:'center' }}/>
                   </div>
                   {/* Time signature */}
                   <select value={composerTimeSig} onChange={e => { setComposerTimeSig(e.target.value); mpBroadStateRef.current?.({ type:'composer_timesig', sig:e.target.value }); }}
-                    style={{ background:'rgba(255,255,255,.05)', border:'1px solid rgba(255,255,255,.08)', borderRadius:8, padding:'4px 8px', color:'#f0a830', fontSize:12, fontWeight:700, outline:'none' }}>
+                    style={{ background:'rgba(255,255,255,.05)', border:'1px solid rgba(255,255,255,.08)', borderRadius:8, padding:'4px 8px', color:'#d4b06a', fontSize:12, fontWeight:700, outline:'none' }}>
                     {['4/4','3/4','2/4','6/8','3/8'].map(ts => <option key={ts} value={ts} style={{background:'#1a1410'}}>{ts}</option>)}
                   </select>
                   {/* Play / Stop */}
                   <button onClick={() => composerPlaying ? stopComposer() : playComposer(composerNotes, composerBpm)}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-colors"
-                    style={{ background:composerPlaying?'rgba(224,124,94,.15)':'linear-gradient(135deg,#f0a830,#c97e1a)', border:composerPlaying?'1px solid rgba(224,124,94,.35)':'none', color:composerPlaying?'#e07c5e':'#1a1108', fontWeight:600 }}>
+                    style={{ background:composerPlaying?'rgba(224,124,94,.15)':'linear-gradient(135deg,#d4b06a,#a9823e)', border:composerPlaying?'1px solid rgba(224,124,94,.35)':'none', color:composerPlaying?'#e07c5e':'#1a1108', fontWeight:600 }}>
                     {composerPlaying ? <><Square size={11}/> Parar</> : <><Play size={11}/> Ouvir</>}
                   </button>
                   {/* Clear */}
@@ -2689,30 +2712,55 @@ export default function PianoMidi() {
                   {/* Ouvir partitura salva */}
                   <button onClick={() => composerPlaying ? stopComposer() : playComposer(composerNotes, composerBpm)}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-colors"
-                    style={{ background:composerPlaying?'rgba(224,124,94,.15)':'linear-gradient(135deg,#f0a830,#c97e1a)', border:composerPlaying?'1px solid rgba(224,124,94,.35)':'none', color:composerPlaying?'#e07c5e':'#1a1108', fontWeight:600 }}>
+                    style={{ background:composerPlaying?'rgba(224,124,94,.15)':'linear-gradient(135deg,#d4b06a,#a9823e)', border:composerPlaying?'1px solid rgba(224,124,94,.35)':'none', color:composerPlaying?'#e07c5e':'#1a1108', fontWeight:600 }}>
                     {composerPlaying ? <><Square size={11}/> Parar</> : <><Play size={11}/> Ouvir</>}
                   </button>
                   {/* Acompanhar — notas caindo */}
                   <button
-                    onClick={() => followState !== 'idle' ? stopFollow() : startFollow(composerNotes, composerBpm)}
+                    onClick={() => followState !== 'idle' ? stopGroupFollow() : startGroupFollow()}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-colors"
                     style={{ background:followState!=='idle'?'rgba(224,124,94,.15)':'rgba(155,209,126,.18)', border:followState!=='idle'?'1px solid rgba(224,124,94,.35)':'1px solid rgba(155,209,126,.4)', color:followState!=='idle'?'#e07c5e':'#9bd17e', fontWeight:600 }}>
                     {followState !== 'idle' ? <><X size={11}/> Parar</> : <><Target size={11}/> Acompanhar</>}
                   </button>
+                  <button onClick={() => setFreePickerOpen(true)} className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs transition-colors"
+                    style={{ background:'rgba(255,255,255,.04)', border:'1px solid rgba(255,255,255,.12)', color:'#cdbfa9' }}>
+                    <ListMusic size={11}/> Trocar música
+                  </button>
                   {/* Editar */}
                   <button onClick={() => { stopComposer(); stopFollow(); setComposerSaved(false); }}
                     className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs transition-colors"
-                    style={{ background:'rgba(240,168,48,.08)', border:'1px solid rgba(240,168,48,.2)', color:'#f0a830' }}>
+                    style={{ background:'rgba(212,176,106,.08)', border:'1px solid rgba(212,176,106,.2)', color:'#d4b06a' }}>
                     <PenLine size={11}/> Editar
                   </button>
                 </>
               ) : (
                 <>
-                  <button onClick={() => { setComposerMode(true); mpBroadStateRef.current?.({ type: 'composer_enter' }); }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-colors" style={{ background:'rgba(240,168,48,.08)', border:'1px solid rgba(240,168,48,.2)', color:'#f0a830' }}>
-                    <PenLine size={11}/> Criar Partitura
+                  {/* One quiet control for appearance: material on the left, color swatches on the right */}
+                  <div className="free-appearance">
+                    <div className="free-seg" role="group" aria-label="Estilo das notas">
+                      {Object.entries(FREE_LOOKS).map(([id, l]) => (
+                        <button key={id} aria-pressed={freeLook===id} onClick={() => setFreeLook(id)}>
+                          {id === 'glass' ? <Droplet size={12} aria-hidden="true"/> : <Sun size={12} aria-hidden="true"/>}<span>{l.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <span className="free-appearance__rule" aria-hidden="true"/>
+                    <div className="free-swatches" role="group" aria-label="Paleta de cores">
+                      {Object.entries(FREE_PALETTES).map(([id, p]) => (
+                        <button key={id} aria-pressed={freePalette===id} aria-label={p.label} title={p.label} onClick={() => setFreePalette(id)}>
+                          <i aria-hidden="true" style={{ background:`linear-gradient(135deg,${p.stops[0][1]},${p.stops.at(-1)[1]})` }}/>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <button onClick={() => setFreePickerOpen(true)} className="free-chip free-chip--amber">
+                    <ListMusic size={13}/> Músicas
                   </button>
-                  <button onClick={() => setMpOpen(true)} className="text-xs px-3 py-1.5 rounded-full flex items-center gap-1.5 transition-colors" style={{ background:mpInRoom?'rgba(155,209,126,.1)':'rgba(255,255,255,.05)', border:`1px solid ${mpInRoom?'rgba(155,209,126,.25)':'rgba(255,255,255,.08)'}`, color:mpInRoom?'#9bd17e':'#8a7d6c' }}>
-                    <Radio size={11}/>{mpInRoom ? mpCode : 'Ao Vivo'}
+                  <button onClick={() => { setComposerMode(true); setFreeSong(null); mpBroadStateRef.current?.({ type: 'composer_enter' }); }} className="free-chip">
+                    <PenLine size={13}/> Criar Partitura
+                  </button>
+                  <button onClick={() => setMpOpen(true)} className={`free-chip${mpInRoom ? ' free-chip--live' : ''}`}>
+                    <Radio size={13}/>{mpInRoom ? mpCode : 'Ao Vivo'}
                   </button>
                 </>
               )}
@@ -2740,7 +2788,7 @@ export default function PianoMidi() {
               const nx  = LEFT + cum * PX + gapAcc;
               const isPlay = composerPlayIdx === i;
               const isRest = note.name === 'rest';
-              const clr = isPlay ? '#f0a830' : '#e8dfd0';
+              const clr = isPlay ? '#d4b06a' : '#e8dfd0';
               const dur = note.dur;
               if (!isRest) {
                 const step   = NOTE_STAFF_STEPS[note.name] ?? 6;
@@ -2756,7 +2804,7 @@ export default function PianoMidi() {
                 noteEls.push(
                   <g key={note.id} onClick={() => { if (!composerPlaying && !composerSaved) deleteComposerNote(note.id); }} style={{ cursor:(composerPlaying||composerSaved)?'default':'pointer' }}>
                     <rect x={nx-14} y={Math.min(ny,stemY2)-4} width={28} height={Math.abs(stemY2-ny)+30} fill="transparent"/>
-                    {isPlay && <circle cx={nx} cy={ny} r={14} fill="#f0a830" opacity="0.18"/>}
+                    {isPlay && <circle cx={nx} cy={ny} r={14} fill="#d4b06a" opacity="0.18"/>}
                     {step <= 0  && <line x1={nx-10} y1={ledgerBelow}  x2={nx+10} y2={ledgerBelow}  stroke={clr} strokeWidth="1.5"/>}
                     {step >= 12 && <line x1={nx-10} y1={ledger1Above} x2={nx+10} y2={ledger1Above} stroke={clr} strokeWidth="1.5"/>}
                     {step >= 14 && <line x1={nx-10} y1={ledger2Above} x2={nx+10} y2={ledger2Above} stroke={clr} strokeWidth="1.5"/>}
@@ -2783,7 +2831,7 @@ export default function PianoMidi() {
                   </g>
                 );
               } else {
-                const rc = isPlay ? '#f0a830' : '#a89a87';
+                const rc = isPlay ? '#d4b06a' : '#a89a87';
                 const ry = ST + SL*2;
                 noteEls.push(
                   <g key={note.id} onClick={() => { if (!composerPlaying && !composerSaved) deleteComposerNote(note.id); }} style={{ cursor:(composerPlaying||composerSaved)?'default':'pointer' }}>
@@ -2822,9 +2870,9 @@ export default function PianoMidi() {
                       ))}
                       <line x1={svgW-14} y1={ST} x2={svgW-14} y2={ST+SL*4} stroke="rgba(255,255,255,0.25)" strokeWidth="1.5"/>
                       <line x1={svgW-11} y1={ST} x2={svgW-11} y2={ST+SL*4} stroke="rgba(255,255,255,0.5)"  strokeWidth="3"/>
-                      <text x="2" y={ST+SL*4+6} fill="rgba(240,168,48,0.8)" fontSize={SL*5.8} fontFamily="serif" style={{ userSelect:'none', pointerEvents:'none' }}>𝄞</text>
-                      <text x="49" y={ST+SL*1.5+6} fill="rgba(240,168,48,0.65)" fontSize={SL*2} fontFamily="serif" fontWeight="bold" textAnchor="middle" style={{ userSelect:'none', pointerEvents:'none' }}>{sigNum}</text>
-                      <text x="49" y={ST+SL*3.5+6} fill="rgba(240,168,48,0.65)" fontSize={SL*2} fontFamily="serif" fontWeight="bold" textAnchor="middle" style={{ userSelect:'none', pointerEvents:'none' }}>{sigDen}</text>
+                      <text x="2" y={ST+SL*4+6} fill="rgba(212,176,106,0.8)" fontSize={SL*5.8} fontFamily="serif" style={{ userSelect:'none', pointerEvents:'none' }}>𝄞</text>
+                      <text x="49" y={ST+SL*1.5+6} fill="rgba(212,176,106,0.65)" fontSize={SL*2} fontFamily="serif" fontWeight="bold" textAnchor="middle" style={{ userSelect:'none', pointerEvents:'none' }}>{sigNum}</text>
+                      <text x="49" y={ST+SL*3.5+6} fill="rgba(212,176,106,0.65)" fontSize={SL*2} fontFamily="serif" fontWeight="bold" textAnchor="middle" style={{ userSelect:'none', pointerEvents:'none' }}>{sigDen}</text>
                       {noteEls}
                     </svg>
                   )}
@@ -2836,10 +2884,10 @@ export default function PianoMidi() {
                     {[{d:4,l:'Semibreve'},{d:2,l:'Mínima'},{d:1,l:'Semínima'},{d:0.5,l:'Colcheia'},{d:0.25,l:'Semicolcheia'}].map(({d,l}) => (
                       <button key={d} onClick={() => setComposerSelDur(d)}
                         style={{ flexShrink:0, display:'flex', alignItems:'center', gap:5, padding:'5px 10px', borderRadius:7, fontSize:11, cursor:'pointer',
-                          background:composerSelDur===d?'rgba(240,168,48,.18)':'rgba(255,255,255,.04)',
-                          border:`1px solid ${composerSelDur===d?'rgba(240,168,48,.45)':'rgba(255,255,255,.08)'}`,
-                          color:composerSelDur===d?'#f0a830':'#8a7d6c' }}>
-                        <NoteIcon dur={d} color={composerSelDur===d?'#f0a830':'#6b6052'} size={13}/>{l}
+                          background:composerSelDur===d?'rgba(212,176,106,.18)':'rgba(255,255,255,.04)',
+                          border:`1px solid ${composerSelDur===d?'rgba(212,176,106,.45)':'rgba(255,255,255,.08)'}`,
+                          color:composerSelDur===d?'#d4b06a':'#8a7d6c' }}>
+                        <NoteIcon dur={d} color={composerSelDur===d?'#d4b06a':'#6b6052'} size={13}/>{l}
                       </button>
                     ))}
                     <button onClick={() => addComposerNote('rest', composerSelDur)}
@@ -2854,9 +2902,10 @@ export default function PianoMidi() {
           })()}
 
           {/* ── CANVAS — barras livres OU notas caindo (follow mode) ── */}
-          <div ref={risingCanvasRef} className="flex-1 relative overflow-hidden" style={{ background: followState !== 'idle' ? '#0a0706' : undefined }}>
+          <div className="free-stage flex-1 relative overflow-hidden" style={{ background: followState !== 'idle' ? '#0a0706' : undefined }}>
             {followState !== 'idle' ? (
-              <>
+              // Inset like the stage canvas so falling notes line up with the keys between the cheek blocks.
+              <div className="free-follow">
                 {/* Fundo das colunas */}
                 {WHITE_KEYS.map((note,i) => (
                   <div key={note.name} style={{ position:'absolute', top:0, bottom:0, left:`${(i/WHITE_KEY_COUNT)*100}%`, width:`${WHITE_KEY_WIDTH}%`, background:i%2===0?'rgba(255,255,255,.016)':'rgba(255,255,255,.008)', borderRight:'1px solid rgba(255,255,255,.04)' }}/>
@@ -2868,7 +2917,7 @@ export default function PianoMidi() {
                 {/* Blocos de notas caindo */}
                 {followDispNotes.map(note => {
                   const hitClr = note.hit==='perfect'?'#9bd17e':note.hit==='good'?'#f0d060':note.hit==='miss'?'#e07c5e':null;
-                  const base   = note.isBlack?'#c97e1a':'#f0a830';
+                  const base   = note.isBlack?'#a9823e':'#d4b06a';
                   const clr    = hitClr || base;
                   return (
                     <div key={note.id} style={{
@@ -2889,13 +2938,13 @@ export default function PianoMidi() {
                 })}
 
                 {/* Barra de hit zone */}
-                <div className="hz-bar" style={{ position:'absolute', bottom:0, left:0, right:0, height:3, background:'linear-gradient(90deg,transparent,#f0a830 20%,#f0a830 80%,transparent)', zIndex:10 }}/>
-                <div style={{ position:'absolute', bottom:0, left:0, right:0, height:40, background:'linear-gradient(to top,rgba(240,168,48,.07),transparent)', zIndex:9, pointerEvents:'none' }}/>
+                <div className="hz-bar" style={{ position:'absolute', bottom:0, left:0, right:0, height:3, background:'linear-gradient(90deg,transparent,#d4b06a 20%,#d4b06a 80%,transparent)', zIndex:10 }}/>
+                <div style={{ position:'absolute', bottom:0, left:0, right:0, height:40, background:'linear-gradient(to top,rgba(212,176,106,.07),transparent)', zIndex:9, pointerEvents:'none' }}/>
 
                 {/* Score + combo */}
                 {followState === 'playing' && <>
-                  <div style={{ position:'absolute', top:10, left:12, zIndex:15, fontFamily:'monospace', fontSize:18, fontWeight:700, color:'#f0a830', textShadow:'0 0 12px rgba(240,168,48,.6)' }}>{followScore.toLocaleString()}</div>
-                  {followCombo>=5 && <div style={{ position:'absolute', top:10, right:12, zIndex:15, fontSize:13, fontWeight:700, color:followCombo>=20?'#9bd17e':'#f0a830', textShadow:'0 0 10px currentColor' }}><Zap size={12} style={{ display:'inline', verticalAlign:'middle', marginRight:3 }}/>×{followCombo} combo</div>}
+                  <div style={{ position:'absolute', top:10, left:12, zIndex:15, fontFamily:'monospace', fontSize:18, fontWeight:700, color:'#d4b06a', textShadow:'0 0 12px rgba(212,176,106,.6)' }}>{followScore.toLocaleString()}</div>
+                  {followCombo>=5 && <div style={{ position:'absolute', top:10, right:12, zIndex:15, fontSize:13, fontWeight:700, color:followCombo>=20?'#9bd17e':'#d4b06a', textShadow:'0 0 10px currentColor' }}><Zap size={12} style={{ display:'inline', verticalAlign:'middle', marginRight:3 }}/>×{followCombo} combo</div>}
                 </>}
 
                 {/* Feedback de acerto */}
@@ -2908,7 +2957,7 @@ export default function PianoMidi() {
                 {/* Countdown */}
                 {followState === 'countdown' && followCdown != null && (
                   <div style={{ position:'absolute', inset:0, background:'rgba(0,0,0,.65)', zIndex:20, display:'flex', alignItems:'center', justifyContent:'center' }}>
-                    <div key={followCdown} className="cd-num display-font" style={{ fontSize:100, color:'#f0a830', fontWeight:700, textShadow:'0 0 40px rgba(240,168,48,.9)' }}>{followCdown}</div>
+                    <div key={followCdown} className="cd-num display-font" style={{ fontSize:100, color:'#d4b06a', fontWeight:700, textShadow:'0 0 40px rgba(212,176,106,.9)' }}>{followCdown}</div>
                   </div>
                 )}
 
@@ -2918,94 +2967,64 @@ export default function PianoMidi() {
                   const acc = tot > 0 ? Math.round(((followHits.perfect + followHits.good) / tot) * 100) : 0;
                   return (
                     <div style={{ position:'absolute', inset:0, background:'rgba(0,0,0,.78)', zIndex:20, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:16 }}>
-                      <div className="w-16 h-16 rounded-full flex items-center justify-center" style={{ background:acc>=80?'linear-gradient(135deg,#9bd17e,#5a9d3e)':'linear-gradient(135deg,#f0a830,#c97e1a)', boxShadow:'0 8px 28px -6px rgba(155,209,126,.4)' }}>
+                      <div className="w-16 h-16 rounded-full flex items-center justify-center" style={{ background:acc>=80?'linear-gradient(135deg,#9bd17e,#5a9d3e)':'linear-gradient(135deg,#d4b06a,#a9823e)', boxShadow:'0 8px 28px -6px rgba(155,209,126,.4)' }}>
                         {acc>=80 ? <Trophy size={28} style={{ color:'#0d2a07' }}/> : <Target size={28} style={{ color:'#1a1108' }}/>}
                       </div>
                       <div className="display-font text-2xl celebrate-anim" style={{ color:'#f5efe6' }}>{acc>=95?'Perfeito!':acc>=80?'Muito Bem!':acc>=60?'Bom!':'Continue Praticando!'}</div>
                       <div className="text-sm" style={{ color:'#8a7d6c' }}>Precisão: {acc}%</div>
                       <div className="flex gap-5">
-                        {[['Pontos', followScoreRef.current.toLocaleString(), '#f0a830'],['Combo Máx', followMaxCombo, '#9bd17e'],['Perfeitos', followHits.perfect, '#9bd17e'],['Bons', followHits.good, '#f0d060'],['Erros', followHits.miss, '#e07c5e']].map(([label,val,clr]) => (
+                        {[['Pontos', followScoreRef.current.toLocaleString(), '#d4b06a'],['Combo Máx', followMaxCombo, '#9bd17e'],['Perfeitos', followHits.perfect, '#9bd17e'],['Bons', followHits.good, '#f0d060'],['Erros', followHits.miss, '#e07c5e']].map(([label,val,clr]) => (
                           <div key={label} className="text-center"><div className="text-xl font-bold font-mono" style={{ color:clr }}>{val}</div><div className="text-[10px] uppercase tracking-wider" style={{ color:'#6b6052' }}>{label}</div></div>
                         ))}
                       </div>
-                      <button onClick={() => startFollow(composerNotes, composerBpm)}
+                      <button onClick={startGroupFollow}
                         className="px-5 py-2 rounded-full text-sm flex items-center gap-2 hover:scale-105 transition-all"
-                        style={{ background:'linear-gradient(135deg,#f0a830,#c97e1a)', color:'#1a1108', fontWeight:600 }}>
+                        style={{ background:'linear-gradient(135deg,#d4b06a,#a9823e)', color:'#1a1108', fontWeight:600 }}>
                         <RotateCcw size={14}/> Tentar de novo
                       </button>
                     </div>
                   );
                 })()}
-              </>
+              </div>
             ) : (
-              /* Barras do modo livre */
-              risingBars.map(bar => (
-                <div key={bar.id} style={{
-                  position:'absolute', bottom:0,
-                  left:`${bar.left}%`, width:`${bar.width}%`,
-                  height: Math.max(40, bar.height),
-                  transform:`translateY(-${bar.floatY}px)`,
-                  opacity: bar.opacity,
-                  background: bar.color === '#ffffff'
-                    ? 'linear-gradient(0deg,rgba(255,255,255,.15) 0%,rgba(255,255,255,.9) 40%,#ffffff 100%)'
-                    : `linear-gradient(0deg,${bar.color}22 0%,${bar.color}bb 40%,${bar.color} 100%)`,
-                  boxShadow: bar.color === '#ffffff'
-                    ? '0 0 18px rgba(255,255,255,.5), 0 0 40px rgba(255,255,255,.15)'
-                    : `0 0 18px ${bar.color}88, 0 0 40px ${bar.color}33`,
-                  borderRadius:'3px 3px 0 0',
-                }}/>
-              ))
+              <>
+                <FreeModeStage barsRef={risingBarsRef} getAudioFrame={getAudioFrame} palette={freePalette} look={freeLook}/>
+                {!composerMode && <NowPlaying midis={[...activeNotes].map(n => NAME_TO_NOTE.get(n)?.midi).filter(m => m != null)} lang={labelLang}/>}
+                {freeTotal === 0 && !composerMode && (
+                  <div className="free-hint">
+                    <span className="free-hint__ring" aria-hidden="true"><Music size={20}/></span>
+                    <p className="free-hint__title">Toque qualquer tecla</p>
+                    <p className="free-hint__text">{freeLook === 'glass' ? 'Cada nota vira uma gota de vidro líquido que sobe pelo palco.' : 'Cada nota se transforma em luz.'} Segure para que ela cresça; toque um acorde e ele ganha nome.</p>
+                    <p className="free-hint__keys"><kbd>Z</kbd>–<kbd>M</kbd> <kbd>Q</kbd>–<kbd>I</kbd><span>·</span>mouse<span>·</span>toque<span>·</span>MIDI</p>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
-          {/* Piano */}
-          <div className="relative select-none w-full flex-shrink-0" style={{ height:200, background:'#0e0a06' }}>
-            <div className="absolute inset-0 flex gap-[2px] px-[2px]">
-              {WHITE_KEYS.map(note => {
-                const isActive = activeNotes.has(note.name);
-                const remotePressing = remoteNoteDisplay.get(note.name) || [];
-                const pressColor = (isActive && mpInRoom) ? mpMeRef.current.color : (remotePressing.length > 0 ? remotePressing[0].color : null);
-                const pressGrad = pressColor ? `linear-gradient(180deg,${lightenColor(pressColor)},${pressColor})` : null;
-                const cnt = keyClickCounts.get(note.name) || 0;
-                const isEditing = composerMode && !composerSaved;
-                return (
-                  <button key={note.name}
-                    onPointerDown={isEditing
-                      ? (e) => { e.preventDefault(); try{e.currentTarget.setPointerCapture(e.pointerId);}catch{} addComposerNote(note.name, composerSelDur); playNote(note.name); }
-                      : handlePianoPointerDown(note.name)}
-                    onPointerUp={isEditing ? () => releaseNote(note.name) : handlePianoPointerEnd}
-                    onPointerCancel={isEditing ? () => releaseNote(note.name) : handlePianoPointerEnd}
-                    onPointerLeave={isEditing ? undefined : handlePianoPointerEnd}
-                    className="flex-1 relative rounded-b-md key-press-anim flex flex-col items-center justify-end pb-2"
-                    style={{ overflow:'visible', background:pressGrad??(isActive?'linear-gradient(180deg,#ffd991,#f0a830)':'linear-gradient(180deg,#f0eade,#d8ceba)'), boxShadow:pressColor?`inset 0 4px 8px rgba(0,0,0,.15),0 0 16px ${pressColor}77`:(isActive?'inset 0 4px 8px rgba(0,0,0,.15)':'0 2px 0 rgba(0,0,0,.5),inset 0 -2px 6px rgba(0,0,0,.1)'), transform:isActive?'translateY(2px)':'translateY(0)', cursor:'pointer', border:'none', touchAction:'none' }}>
-                    {!isEditing && cnt > 0 && <div style={{ position:'absolute', top:5, right:2, background:'rgba(0,0,0,.55)', color:pressColor||'#f0a830', borderRadius:7, fontSize:9, padding:'1px 4px', fontWeight:700, zIndex:10, lineHeight:1.4, pointerEvents:'none' }}>{cnt}</div>}
-                    <span className="display-font text-xs font-medium pointer-events-none" style={{ color:pressColor?'#fff':(isActive?'#5a3a0a':'#7a6850') }}>{labelLang==='pt'?note.pt:note.en}</span>
-                  </button>
-                );
-              })}
-            </div>
-            <div className="absolute inset-0 pointer-events-none">
-              {BLACK_KEYS.map(note => {
-                const isActive = activeNotes.has(note.name);
-                const remotePressing = remoteNoteDisplay.get(note.name) || [];
-                const pressColor = (isActive && mpInRoom) ? mpMeRef.current.color : (remotePressing.length > 0 ? remotePressing[0].color : null);
-                const pressGrad = pressColor ? `linear-gradient(180deg,${lightenColor(pressColor)},${pressColor})` : null;
-                const isEditing = composerMode && !composerSaved;
-                return (
-                  <button key={note.name}
-                    onPointerDown={isEditing
-                      ? (e) => { e.preventDefault(); try{e.currentTarget.setPointerCapture(e.pointerId);}catch{} addComposerNote(note.name, composerSelDur); playNote(note.name); }
-                      : handlePianoPointerDown(note.name)}
-                    onPointerUp={isEditing ? () => releaseNote(note.name) : handlePianoPointerEnd}
-                    onPointerCancel={isEditing ? () => releaseNote(note.name) : handlePianoPointerEnd}
-                    onPointerLeave={isEditing ? undefined : handlePianoPointerEnd}
-                    className="absolute rounded-b-md key-press-anim flex flex-col items-center justify-end pb-1 pointer-events-auto"
-                    style={{ left:`${BLACK_KEY_LEFTS.get(note.name)}%`, width:`${WHITE_KEY_WIDTH*.6}%`, height:'62%', top:0, overflow:'visible', background:pressGrad??(isActive?'linear-gradient(180deg,#f0a830,#c97e1a)':'linear-gradient(180deg,#1e1510,#0a0806)'), boxShadow:pressColor?`inset 0 4px 8px rgba(0,0,0,.3),0 0 16px ${pressColor}99`:(isActive?'inset 0 4px 8px rgba(0,0,0,.3)':'0 3px 0 rgba(0,0,0,.8),inset 0 -2px 4px rgba(0,0,0,.6)'), transform:isActive?'translateY(2px)':'translateY(0)', cursor:'pointer', border:'none', zIndex:2, touchAction:'none' }}>
-                    <span className="display-font text-[9px] font-medium pointer-events-none" style={{ color:pressColor?'#fff':(isActive?'#1a1108':'#6a5a4a') }}>{labelLang==='pt'?note.pt:note.en}</span>
-                  </button>
-                );
-              })}
-            </div>
+          {/* The same lacquered grand as the main page, flush with the bottom of the stage */}
+          <div className="grand grand--flush flex-shrink-0">
+            <GrandCase fallboard={followState === 'idle' ? <FreeModeReflection barsRef={risingBarsRef} palette={freePalette} look={freeLook}/> : null}>
+              <GrandKeyboard
+                whiteKeys={WHITE_KEYS} blackKeys={BLACK_KEYS}
+                blackLeft={note => BLACK_KEY_LEFTS.get(note.name)} blackWidth={WHITE_KEY_WIDTH*.6}
+                keyState={note => {
+                  const isActive = activeNotes.has(note.name);
+                  const remotePressing = remoteNoteDisplay.get(note.name) || [];
+                  const pressColor = (isActive && mpInRoom) ? mpMeRef.current.color : (remotePressing[0]?.color ?? null);
+                  // Keys take their beam's palette color; ivory on ivory would be invisible, so Marfim lights keys in gold.
+                  const tint = pressColor ?? (freePalette === 'ivory' ? null : noteColor(note.midi, freePalette));
+                  return { pressed: isActive || remotePressing.length > 0, lit: isActive || remotePressing.length > 0, tint, expected: false };
+                }}
+                handlersFor={note => (composerMode && !composerSaved) ? {
+                  onPointerDown: (e) => { e.preventDefault(); try{e.currentTarget.setPointerCapture(e.pointerId);}catch{} addComposerNote(note.name, composerSelDur); playNote(note.name); },
+                  onPointerUp: () => releaseNote(note.name),
+                  onPointerCancel: () => releaseNote(note.name),
+                } : { onPointerDown: handlePianoPointerDown(note.name), onPointerUp: handlePianoPointerEnd, onPointerCancel: handlePianoPointerEnd, onPointerLeave: handlePianoPointerEnd }}
+                showLabels labelLang={labelLang}
+                counts={composerMode && !composerSaved ? null : keyClickCounts}
+              />
+            </GrandCase>
           </div>
         </div>
       )}
@@ -3145,7 +3164,7 @@ export default function PianoMidi() {
                 </div>
 
                 {/* Copy code */}
-                <button onClick={() => { try { navigator.clipboard.writeText(mpCode); } catch(e) {} }} className="w-full mb-4 py-2 px-4 rounded-xl text-sm font-mono tracking-widest flex items-center justify-between transition-colors hover:scale-[1.01]" style={{ background:'rgba(255,255,255,.04)', border:'1px solid rgba(255,255,255,.08)', color:'#f0a830' }}>
+                <button onClick={() => { try { navigator.clipboard.writeText(mpCode); } catch(e) {} }} className="w-full mb-4 py-2 px-4 rounded-xl text-sm font-mono tracking-widest flex items-center justify-between transition-colors hover:scale-[1.01]" style={{ background:'rgba(255,255,255,.04)', border:'1px solid rgba(255,255,255,.08)', color:'#d4b06a' }}>
                   <span>{mpCode}</span>
                   <div className="flex items-center gap-1.5 text-xs" style={{ color:'#8a7d6c' }}><Copy size={12}/> copiar código</div>
                 </button>

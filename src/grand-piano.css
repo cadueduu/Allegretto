@@ -1,0 +1,234 @@
+/* =====================================================================
+   Grand piano: black lacquer case + ivory/ebony keys with real depth.
+   ===================================================================== */
+.grand {
+  --case-pad: 18px;
+  position: relative;
+  padding: 16px var(--case-pad) 0;
+  border-radius: 20px 20px 12px 12px;
+  background:
+    /* diagonal sheen sweeping across the lacquer */
+    linear-gradient(112deg, rgba(255, 255, 255, 0) 28%, rgba(255, 255, 255, .055) 40%, rgba(255, 255, 255, 0) 52%),
+    linear-gradient(180deg, #1d1a19 0%, #0b0a0a 12%, #060505 62%, #0d0b0a 100%);
+  box-shadow:
+    0 70px 120px -40px rgba(0, 0, 0, .95),
+    0 0 0 1px rgba(255, 255, 255, .06),
+    inset 0 1px 0 rgba(255, 255, 255, .16),
+    inset 0 -1px 0 rgba(0, 0, 0, .8);
+}
+
+/* Fallboard (nameboard) with a gold-foil signature and a soft reflection line. */
+.grand__fallboard {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 50px;
+  margin: 16px calc(var(--case-pad) * -1) 0;
+  background: linear-gradient(180deg, #080707 0%, #191615 38%, #0b0a0a 72%, #050404 100%);
+  border-top: 1px solid rgba(255, 255, 255, .09);
+  box-shadow: inset 0 -12px 18px -12px rgba(0, 0, 0, .95);
+}
+.grand__fallboard::before {
+  content: '';
+  position: absolute;
+  top: 7px;
+  right: 6%;
+  left: 6%;
+  height: 10px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .06) 25%, rgba(255, 255, 255, .11) 50%, rgba(255, 255, 255, .06) 75%, transparent);
+  border-radius: 50%;
+  filter: blur(3px);
+  pointer-events: none;
+}
+.grand__logo {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  color: transparent;
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 24px;
+  font-style: italic;
+  font-weight: 500;
+  letter-spacing: .16em;
+  background: linear-gradient(180deg, #f6e3b0 0%, #d4b06a 45%, #9c7634 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, .8));
+}
+/* Thin gold rules either side of the signature. */
+.grand__logo::before, .grand__logo::after { content: ''; width: 36px; height: 1px; background: linear-gradient(90deg, transparent, #b8924b); }
+.grand__logo::after { background: linear-gradient(90deg, #b8924b, transparent); }
+
+.grand__keybed { display: flex; align-items: stretch; margin: 0 calc(var(--case-pad) * -1); }
+.grand__keys { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.grand__felt { position: relative; z-index: 3; height: 5px; background: linear-gradient(180deg, #84231a, #4c0f0a); box-shadow: 0 2px 4px rgba(0, 0, 0, .7), inset 0 1px 0 rgba(255, 255, 255, .12); }
+.grand__cheek { flex: 0 0 var(--case-pad); background: linear-gradient(90deg, #040303 0%, #1c1918 55%, #080707 100%); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .1); }
+.grand__cheek--left { border-radius: 0 0 0 10px; }
+.grand__cheek--right { background: linear-gradient(270deg, #040303 0%, #1c1918 55%, #080707 100%); border-radius: 0 0 10px 0; }
+.grand__keyslip { height: 16px; margin: 0 calc(var(--case-pad) * -1); background: linear-gradient(180deg, #1c1918 0%, #0a0909 55%, #030303 100%); border-radius: 0 0 12px 12px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .13); }
+
+/* =====================================================================
+   Keys
+   ===================================================================== */
+.gk {
+  --gk-height: 236px;
+  position: relative;
+  height: var(--gk-height);
+  background: #080606;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+.gk__whites { position: absolute; inset: 0; display: flex; gap: 2px; }
+
+.gk-white, .gk-black { font: inherit; border: 0; cursor: pointer; touch-action: none; -webkit-tap-highlight-color: transparent; }
+.gk-white:focus-visible, .gk-black:focus-visible { outline: 2px solid #d4b06a; outline-offset: -4px; }
+
+/* Ivory: shadow from the felt at the top, rounded edges, warm toward the front. */
+.gk-white {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 0 20px;
+  border-radius: 0 0 6px 6px;
+  background:
+    linear-gradient(180deg, rgba(24, 14, 6, .4) 0, rgba(24, 14, 6, 0) 20px),
+    linear-gradient(90deg, rgba(110, 90, 60, .11) 0, transparent 14%, transparent 86%, rgba(110, 90, 60, .16) 100%),
+    linear-gradient(180deg, #fffdf8 0%, #f9f3e8 48%, #f1e9d9 84%, #e8ddc8 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9);
+  transition: background .07s, box-shadow .07s;
+}
+/* Front lip of the key, seen from slightly above; it shrinks when the key goes down. */
+.gk-white::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 11px;
+  border-radius: 0 0 6px 6px;
+  background: linear-gradient(180deg, #eee5d3 0%, #d8caae 65%, #c5b493 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 3px 4px rgba(0, 0, 0, .45);
+  transition: height .07s;
+}
+.gk-white.is-pressed {
+  background:
+    linear-gradient(180deg, rgba(24, 14, 6, .55) 0, rgba(24, 14, 6, 0) 30px),
+    linear-gradient(90deg, rgba(110, 90, 60, .13) 0, transparent 14%, transparent 86%, rgba(110, 90, 60, .18) 100%),
+    linear-gradient(180deg, #f6efe2 0%, #eee5d3 55%, #e3d8c2 100%);
+}
+.gk-white.is-pressed::after { height: 4px; }
+.gk-white.is-lit {
+  z-index: 1;
+  background:
+    linear-gradient(180deg, rgba(24, 14, 6, .45) 0, rgba(24, 14, 6, 0) 28px),
+    linear-gradient(180deg, var(--tint-soft) 0%, var(--tint-mid) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .7), inset 0 -18px 26px -14px var(--tint), 0 0 30px -6px var(--tint);
+}
+.gk-white.is-lit::after { background: linear-gradient(180deg, var(--tint-mid), var(--tint)); }
+
+/* Lesson / sheet hint: a breathing gold outline and glow from the front of the key. */
+.gk-white.is-expected::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(212, 176, 106, .14) 0%, rgba(212, 176, 106, .66) 100%);
+  box-shadow: inset 0 0 0 2px rgba(212, 176, 106, 1), 0 0 22px rgba(212, 176, 106, .45);
+  pointer-events: none;
+  animation: gkExpect 1.4s ease-in-out infinite;
+}
+
+/* Ebony: dark sides, a raised top face with a specular streak, and a front bevel below it. */
+.gk-black {
+  position: absolute;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  height: 63%;
+  /* Fixed px: a % padding would resolve against the keyboard's width and push the labels off the key. */
+  padding: 0 0 26px;
+  border-radius: 0 0 4px 4px;
+  background: linear-gradient(180deg, #131111 0%, #050404 100%);
+  box-shadow: 0 8px 10px -2px rgba(0, 0, 0, .55), 3px 4px 7px rgba(0, 0, 0, .35), inset 0 -2px 0 rgba(255, 255, 255, .08);
+  transition: box-shadow .07s;
+}
+.gk-black::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 9%;
+  bottom: 13%;
+  left: 9%;
+  border-radius: 0 0 3px 3px;
+  background: linear-gradient(180deg, #171413 0%, #2e2825 32%, #1f1b19 68%, #141110 100%);
+  box-shadow: inset 1px 0 0 rgba(255, 255, 255, .08), inset -1px 0 0 rgba(0, 0, 0, .5), 0 1px 0 rgba(255, 255, 255, .06);
+  transition: bottom .07s, background .07s;
+}
+.gk-black::after {
+  content: '';
+  position: absolute;
+  top: 4%;
+  bottom: 24%;
+  left: 21%;
+  width: 11%;
+  border-radius: 2px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .24), rgba(255, 255, 255, 0));
+  pointer-events: none;
+}
+.gk-black.is-pressed { box-shadow: 0 3px 5px rgba(0, 0, 0, .5), inset 0 -1px 0 rgba(255, 255, 255, .05); }
+.gk-black.is-pressed::before { bottom: 6%; }
+.gk-black.is-lit { box-shadow: 0 0 24px -2px var(--tint), 0 3px 5px rgba(0, 0, 0, .5); }
+.gk-black.is-lit::before { background: linear-gradient(180deg, var(--tint-mid) 0%, var(--tint) 70%, var(--tint) 100%); }
+/* An outline alone disappears on ebony: the expected black key lights its whole top face in gold. */
+.gk-black.is-expected { animation: gkExpectBlack 1.4s ease-in-out infinite; }
+.gk-black.is-expected::before {
+  background: linear-gradient(180deg, #3a2f22 0%, #7a5d2c 38%, #c9a35a 78%, #ecd49c 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 236, 190, .55);
+  animation: gkExpectFace 1.4s ease-in-out infinite;
+}
+.gk-black.is-expected::after { background: linear-gradient(180deg, rgba(255, 255, 255, .45), rgba(255, 255, 255, 0)); }
+.gk-black.is-expected .gk-label, .gk-black.is-expected .gk-hint { color: #17110a; }
+
+@keyframes gkExpect { 0%, 100% { opacity: .65; } 50% { opacity: 1; } }
+@keyframes gkExpectFace { 0%, 100% { filter: brightness(.82); } 50% { filter: brightness(1.18); } }
+@keyframes gkExpectBlack {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(212, 176, 106, .55), 0 0 10px rgba(212, 176, 106, .25), 0 8px 10px -2px rgba(0, 0, 0, .55); }
+  50% { box-shadow: 0 0 0 2px rgba(212, 176, 106, 1), 0 0 22px rgba(212, 176, 106, .6), 0 8px 10px -2px rgba(0, 0, 0, .55); }
+}
+
+/* Engraved-looking labels. */
+.gk-label { position: relative; z-index: 1; color: #8c7b60; font-family: 'Cormorant Garamond', Georgia, serif; font-size: 16px; font-weight: 600; line-height: 1; pointer-events: none; }
+.gk-hint { position: relative; z-index: 1; color: #b4a385; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9.5px; letter-spacing: .06em; line-height: 1; pointer-events: none; }
+.gk-white.is-lit .gk-label, .gk-white.is-lit .gk-hint { color: #4a3414; }
+.gk-black .gk-label { color: #cbbda6; font-size: 12px; }
+.gk-black .gk-hint { color: #93877a; font-size: 8.5px; }
+.gk-black.is-lit .gk-label, .gk-black.is-lit .gk-hint { color: #2a1c08; }
+
+.gk-count { position: absolute; top: 24px; left: 50%; z-index: 1; min-width: 20px; padding: 0 6px; color: #ecd49c; font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 17px; text-align: center; background: rgba(12, 10, 9, .82); border-radius: 999px; transform: translateX(-50%); pointer-events: none; }
+.gk-black .gk-count { top: 8px; min-width: 16px; padding: 0 4px; font-size: 9px; }
+
+@media (max-width: 640px) {
+  .grand { --case-pad: 10px; padding-top: 12px; border-radius: 16px 16px 10px 10px; }
+  .grand__fallboard { height: 38px; margin-top: 12px; }
+  .grand__logo { gap: 10px; font-size: 18px; }
+  .grand__logo::before, .grand__logo::after { width: 20px; }
+  .gk { --gk-height: 186px; }
+  .gk-white { padding-bottom: 16px; }
+  .gk-label { font-size: 13px; }
+  .gk-black .gk-label, .gk-count { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gk-white.is-expected::before, .gk-black.is-expected, .gk-black.is-expected::before { animation: none; }
+}

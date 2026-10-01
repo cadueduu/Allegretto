@@ -355,7 +355,13 @@ npm run dev
 Acesse:
 
 ```text
-http://localhost:5173
+http://localhost:5173/Allegretto/
+```
+
+Para conferir o motor de áudio (renderiza os timbres offline, sem tocar nos alto-falantes):
+
+```text
+http://localhost:5173/Allegretto/audio-check.html
 ```
 
 ---
