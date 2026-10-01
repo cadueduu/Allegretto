@@ -2936,6 +2936,13 @@ export default function PianoMidi() {
               const bx = beatToX(m) - 10;
               noteEls.push(<line key={`bm-${m}`} x1={bx} y1={TT} x2={bx} y2={BB} stroke="rgba(255,255,255,0.3)" strokeWidth="1.3"/>);
             }
+            // Measures where the left hand is silent get a whole rest, so the bass staff reads as "rest", not "missing".
+            for (let m = 0; m < totalBeats - 1e-6; m += beatsPerMeasure) {
+              const busy = composerBass.some(b => b.start < m + beatsPerMeasure - 1e-6 && b.start + b.dur > m + 1e-6);
+              if (busy) continue;
+              const restX = (beatToX(m) + beatToX(Math.min(m + beatsPerMeasure, totalBeats))) / 2 - 10;
+              noteEls.push(<rect key={`br-${m}`} x={restX - 6 * k} y={BT + SL} width={12 * k} height={SL * 0.45} fill="rgba(232,223,208,0.55)"/>);
+            }
             const svgW = Math.max(560, beatToX(totalBeats) + 80);
             const midY = (TT + BB) / 2;
             const isEmpty = composerNotes.length === 0 && composerBass.length === 0;

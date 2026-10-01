@@ -342,6 +342,10 @@ export function MidiImportDialog({ result, onConfirm, onCancel, onRetry }) {
               Melodia extraída das {report.sourceNotes} notas do arquivo
               {octaves > 0 && <>, transposta {octaves} oitava{octaves > 1 ? 's' : ''} para {report.octaveShift < 0 ? 'baixo' : 'cima'}</>}
               {report.folded > 0 && <>; {report.folded} nota{report.folded > 1 ? 's' : ''} fora das 25 teclas {report.folded > 1 ? 'foram trazidas' : 'foi trazida'} para dentro</>}.
+              {' '}
+              {report.bassNotes > 0
+                ? <>Mão esquerda: <strong>{report.bassNotes} notas</strong> na clave de fá{report.bassStartMeasure > 2 && <>, entrando no compasso {report.bassStartMeasure}</>}.</>
+                : <>Este arquivo não tem mão esquerda (nada abaixo do Dó central).</>}
             </p>
             <div className="import-dialog__actions">
               <button className="ghost-button" onClick={onCancel}>Cancelar</button>

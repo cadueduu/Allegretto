@@ -7,6 +7,9 @@ const HIGHEST = 84; // C6
 // Note values the lessons, training and staff all know how to draw, in beats (quarter = 1).
 const DURATIONS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4];
 const DRUM_CHANNEL = 9;
+// Left hand: everything below middle C, shown on the bass staff and played as accompaniment.
+const BASS_CEILING = 60; // C4 belongs to the melody
+const BASS_FLOOR = 36;   // C2: lower notes are folded up an octave so they stay readable on the bass staff
 
 export class MidiImportError extends Error {}
 
@@ -104,7 +107,12 @@ function extractMelody(notes, division) {
     const recent = melody.slice(-6);
     const register = recent.length ? recent.reduce((sum, n) => sum + n.pitch, 0) / recent.length : note.pitch;
     const underHeldNote = current && note.start < current.end - tolerance && note.pitch < current.pitch - 4;
-    const dropsToBass = recent.length >= 3 && note.pitch < register - 10;
+    // A big drop below the line is usually accompaniment, unless it stays in the treble and sounds
+    // completely alone: then it is the melody leaping down (e.g. an octave echo in a solo intro).
+    // Left-hand arpeggios also sound one note at a time, which is why the register check matters.
+    const alone = !sorted.some(other => other !== note && other.start <= note.start + tolerance && other.end > note.start + tolerance);
+    const melodicLeap = alone && note.pitch >= BASS_CEILING;
+    const dropsToBass = recent.length >= 3 && note.pitch < register - 10 && !melodicLeap;
     if (underHeldNote || dropsToBass) continue;
     melody.push(note);
   }
@@ -113,9 +121,6 @@ function extractMelody(notes, division) {
 
 const nearestDuration = beats => DURATIONS.reduce((best, d) => (Math.abs(d - beats) < Math.abs(best - beats) ? d : best));
 
-// Left hand: everything below middle C, shown on the bass staff and played as accompaniment.
-const BASS_CEILING = 60; // C4 belongs to the melody
-const BASS_FLOOR = 36;   // C2: lower notes are folded up an octave so they stay readable on the bass staff
 const quarterBeat = beats => Math.round(beats * 4) / 4;
 
 /**
@@ -177,7 +182,8 @@ function fitToKeyboard(pitches) {
 /** "Alicia - Clair Obscur_ Expedition 33.mid" → { title: 'Alicia', artist: 'Clair Obscur: Expedition 33' } */
 export function titleFromFileName(fileName) {
   // Windows can't store ":" in file names, so downloads usually turn "Name: Subtitle" into "Name_ Subtitle".
-  const base = fileName.replace(/\.(mid|midi)$/i, '').replace(/_ /g, ': ').replace(/_/g, ' ').trim();
+  // Strip every trailing extension: downloads are often renamed to "song.mid.mid".
+  const base = fileName.replace(/(\.(mid|midi))+$/i, '').replace(/_ /g, ': ').replace(/_/g, ' ').trim();
   const [title, ...rest] = base.split(' - ');
   return { title: title.trim() || 'Música importada', artist: rest.join(' - ').trim() || 'MIDI importado' };
 }
@@ -214,6 +220,15 @@ export function midiToSong(buffer, fileName = 'musica.mid') {
       bass,
       source: 'midi',
     },
-    report: { sourceNotes: notes.length, melodyNotes: songNotes.length, bassNotes: bass.length, octaveShift: shift / 12, folded, seconds: Math.round(totalBeats * 60 / bpm) },
+    report: {
+      sourceNotes: notes.length,
+      melodyNotes: songNotes.length,
+      bassNotes: bass.length,
+      // Measure where the left hand comes in, so a long solo intro doesn't look like a missing part.
+      bassStartMeasure: bass.length ? Math.floor(bass[0][1] / (timeSignature[0] * (4 / timeSignature[1]))) + 1 : null,
+      octaveShift: shift / 12,
+      folded,
+      seconds: Math.round(totalBeats * 60 / bpm),
+    },
   };
 }
