@@ -182,3 +182,32 @@
 @media (prefers-reduced-motion: reduce) {
   .kids-lesson *, .kids-lesson *::before, .kids-lesson *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- Newer exercises: beats, staff choices, putting notes in order ---------- */
+.lx-beats { display: flex; align-items: center; justify-content: center; gap: 14px; min-height: 52px; }
+.lx-beats i { width: 26px; height: 26px; background: rgba(36, 50, 95, .12); border-radius: 50%; transition: transform .1s, background-color .1s; }
+.lx-beats i.is-past { background: rgba(255, 93, 93, .35); }
+.lx-beats i.is-on { background: #ff5d5d; transform: scale(1.35); box-shadow: 0 0 0 6px rgba(255, 93, 93, .2); }
+.lx-beats .lx-count { font-size: 46px; }
+.lx-dots span.is-now { border-style: solid; border-color: var(--c); animation: kids-bob 1s ease-in-out infinite; }
+.lx-staff-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; width: 100%; max-width: 640px; }
+.lx-staff-options .lx-rcard { padding: 6px 8px; }
+.lx-shakebox { display: flex; justify-content: center; width: 100%; }
+.lx-shakebox.is-shaking { animation: kids-shake .4s ease-out; }
+.lx-slots { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.lx-slots span { display: grid; place-items: center; min-width: 100px; height: 74px; padding: 0 12px; color: rgba(36, 50, 95, .35); font-size: 22px; font-weight: 700; background: rgba(255, 255, 255, .6); border: 3px dashed rgba(36, 50, 95, .2); border-radius: 18px; }
+.lx-slots span.is-on { display: flex; gap: 6px; color: #fff; background: var(--c); border: 3px solid color-mix(in srgb, var(--c) 70%, #24325f); text-shadow: 0 1px 0 rgba(0, 0, 0, .2); animation: kids-pop .35s ease-out; }
+.lx-slots span i { font-style: normal; }
+.lx-cards { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
+.lx-card { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 112px; padding: 14px 18px; color: var(--ink); background: #fff; border: 4px solid var(--c); border-radius: 20px; box-shadow: 0 6px 0 color-mix(in srgb, var(--c) 60%, #24325f 15%); cursor: pointer; transition: transform .1s, opacity .2s; }
+.lx-card span { font-size: 44px; line-height: 1; }
+.lx-card strong { font-size: 24px; font-weight: 700; }
+.lx-card:hover:not(:disabled) { transform: translateY(-3px); }
+.lx-card:active:not(:disabled) { transform: translateY(4px); box-shadow: 0 2px 0 color-mix(in srgb, var(--c) 60%, #24325f 15%); }
+.lx-card.is-used { opacity: .25; transform: scale(.9); cursor: default; }
+.lx-card.is-wrong { animation: kids-shake .4s ease-out; }
+@media (max-width: 560px) {
+  .lx-staff-options { grid-template-columns: minmax(0, 1fr); max-width: 260px; }
+  .lx-slots span { min-width: 60px; height: 52px; font-size: 18px; }
+  .lx-card { min-width: 74px; padding: 8px 10px; }
+}

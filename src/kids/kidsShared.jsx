@@ -15,17 +15,23 @@ export const NOTE_INFO = {
 const BLACK_NAMES = { 'C#': 'Dó♯', 'D#': 'Mi♭', 'F#': 'Fá♯', 'G#': 'Sol♯', 'A#': 'Si♭' };
 export const WHITE_PCS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
 
-// One octave plus the top Dó: big keys, and every kids' song fits in it.
+// One octave plus the top Dó: big keys, and every kids' song fits in it. Reading the whole treble staff
+// needs more, so those lessons widen the keyboard up to the high Sol.
 export const KID_WHITE = ['C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4', 'C5'];
 const KID_BLACK = [['C#4', 0], ['D#4', 1], ['F#4', 3], ['G#4', 4], ['A#4', 5]]; // [note, white key it follows]
+const WIDE_WHITE = [...KID_WHITE, 'D5', 'E5', 'F5', 'G5'];
+const WIDE_BLACK = [...KID_BLACK, ['C#5', 7], ['D#5', 8], ['F#5', 10]];
 export const KID_KEYS = new Set([...KID_WHITE, ...KID_BLACK.map(([name]) => name)]);
+const WIDE_KEYS = new Set([...WIDE_WHITE, ...WIDE_BLACK.map(([name]) => name)]);
 
 export const pitchClass = name => name.replace(/-?\d+$/, '');
 export const samePitch = (a, b) => pitchClass(a) === pitchClass(b);
-// Notes from outside the little keyboard (MIDI, the computer's upper row) show on the key with the same name.
-export const kidKeyFor = name => (KID_KEYS.has(name) ? name : `${pitchClass(name)}4`);
-/** Every key on the little keyboard with this note's name (both Dós for C). */
-export const keysNamed = name => [...KID_KEYS].filter(key => samePitch(key, name));
+// Notes from outside the keyboard (MIDI, the computer's upper row) show on the key with the same name.
+export const kidKeyFor = (name, wide = false) => ((wide ? WIDE_KEYS : KID_KEYS).has(name) ? name : `${pitchClass(name)}4`);
+/** Every key on the keyboard with this note's name (both Dós for C). */
+export const keysNamed = (name, wide = false) => [...(wide ? WIDE_KEYS : KID_KEYS)].filter(key => samePitch(key, name));
+const SEMITONE = { C: 0, 'C#': 1, D: 2, 'D#': 3, E: 4, F: 5, 'F#': 6, G: 7, 'G#': 8, A: 9, 'A#': 10, B: 11 };
+export const noteMidi = name => 12 * (Number(name.match(/-?\d+$/)[0]) + 1) + SEMITONE[pitchClass(name)];
 export function noteInfo(name) {
   const pc = pitchClass(name);
   if (NOTE_INFO[pc]) return NOTE_INFO[pc];
@@ -92,6 +98,23 @@ export const KIDS_SONGS = [
   },
 ];
 
+// The browser's own voices: Edge and Chrome ship natural-sounding Brazilian ones ("Francisca Online
+// (Natural)", "Google português do Brasil"); robotic system voices are only the fallback.
+function pickVoice(synth) {
+  const score = v => {
+    const lang = (v.lang || '').toLowerCase().replace('_', '-');
+    if (!lang.startsWith('pt')) return -1;
+    let points = lang === 'pt-br' ? 10 : 2;
+    if (/natural|neural|online/i.test(v.name)) points += 6;
+    if (/google/i.test(v.name)) points += 4;
+    if (/francisca|thalita|maria|luciana/i.test(v.name)) points += 1; // softer voices read to kids more gently
+    return points;
+  };
+  let best = null;
+  for (const v of synth.getVoices()) if (score(v) >= 0 && (!best || score(v) > score(best))) best = v;
+  return best;
+}
+
 /** Speaks in Brazilian Portuguese; resolves when done (or right away when the voice is off). */
 export function speak(text, enabled) {
   return new Promise(resolve => {
@@ -101,9 +124,9 @@ export function speak(text, enabled) {
       synth.cancel(); // only the latest thing matters when little hands play fast
       const utterance = new SpeechSynthesisUtterance(text.replace(/♯/g, ' sustenido').replace(/♭/g, ' bemol'));
       utterance.lang = 'pt-BR';
-      utterance.rate = 0.95;
-      utterance.pitch = 1.2;
-      const voice = synth.getVoices().find(v => v.lang?.toLowerCase().startsWith('pt'));
+      utterance.rate = 0.92;
+      utterance.pitch = 1.08;
+      const voice = pickVoice(synth);
       if (voice) utterance.voice = voice;
       utterance.onend = () => resolve();
       utterance.onerror = () => resolve();
@@ -189,7 +212,9 @@ export function Mascot({ mood = 'happy', size = 96, className = '' }) {
  * The big colorful keyboard. mode: 'full' (picture + name), 'emoji' (picture only) or 'plain' (blank keys,
  * like a real piano). targets glow in their color with a pointing hand; marks glow gold with a "?".
  */
-export function KidsKeyboard({ lit, targets = new Set(), marks = new Set(), pointerHandlers, sparks = [], mode = 'full', pointer = true }) {
+export function KidsKeyboard({ active, targets = new Set(), marks = new Set(), pointerHandlers, sparks = [], mode = 'full', pointer = true, wide = false }) {
+  const lit = new Set([...active].map(name => kidKeyFor(name, wide)));
+  const whites = wide ? WIDE_WHITE : KID_WHITE;
   const key = (name, black, style) => {
     const info = noteInfo(name);
     const on = lit.has(name);
@@ -207,48 +232,57 @@ export function KidsKeyboard({ lit, targets = new Set(), marks = new Set(), poin
             {mode === 'full' && <span className="kids-key__name">{info.name}</span>}
           </span>
         )}
-        {sparks.filter(s => s.key === name).map(s => <span key={s.id} className="kids-spark" aria-hidden="true">{s.glyph}</span>)}
+        {sparks.filter(s => kidKeyFor(s.note, wide) === name).map(s => <span key={s.id} className="kids-spark" aria-hidden="true">{s.glyph}</span>)}
       </button>
     );
   };
   return (
-    <div className={`kids-piano kids-piano--${mode}`}>
-      <div className="kids-piano__keys" role="group" aria-label="Teclado">
-        {KID_WHITE.map(name => key(name, false))}
-        {KID_BLACK.map(([name, after]) => key(name, true, { left: `calc(${((after + 1) / KID_WHITE.length) * 100}% - var(--black-w) / 2)` }))}
+    <div className={`kids-piano kids-piano--${mode}${wide ? ' kids-piano--wide' : ''}`}>
+      <div className="kids-piano__keys" role="group" aria-label="Teclado" style={{ gridTemplateColumns: `repeat(${whites.length}, minmax(0, 1fr))` }}>
+        {whites.map(name => key(name, false))}
+        {(wide ? WIDE_BLACK : KID_BLACK).map(([name, after]) => key(name, true, { left: `calc(${((after + 1) / whites.length) * 100}% - var(--black-w) / 2)` }))}
       </div>
     </div>
   );
 }
 
-// Diatonic steps from middle C, for drawing on the treble staff (E4 sits on the bottom line).
-const STAFF_STEP = { C4: 0, D4: 1, E4: 2, F4: 3, G4: 4, A4: 5, B4: 6, C5: 7 };
+// Diatonic steps from middle C, for drawing on the treble staff (E4 sits on the bottom line, F5 on the top one).
+const STAFF_STEP = { C4: 0, D4: 1, E4: 2, F4: 3, G4: 4, A4: 5, B4: 6, C5: 7, D5: 8, E5: 9, F5: 10, G5: 11, A5: 12 };
+export const staffStep = name => STAFF_STEP[name.replace('#', '')] ?? 6;
 
-/** A small treble staff. current: index to circle; passed: how many are already played (drawn green). */
-export function MiniStaff({ notes, colored = false, current = -1, passed = 0 }) {
+/**
+ * A small treble staff. current: index to circle; passed: how many are already played (drawn green);
+ * labels: names under the notes; tint: per-note colors that override the rest (right/wrong answers).
+ */
+export function MiniStaff({ notes, colored = false, current = -1, passed = 0, labels = false, tint = [] }) {
   const SL = 14;
   const TOP = 26;
   const STEP_W = 50;
   const LEFT = 78;
   const width = LEFT + Math.max(1, notes.length) * STEP_W + 18;
+  const height = labels ? 146 : 126;
   const y = step => TOP + (10 - step) * (SL / 2);
   return (
-    <svg className="kids-staff" viewBox={`0 0 ${width} 126`} role="img" aria-label={`Pauta com ${notes.length === 1 ? 'uma nota' : `${notes.length} notas`}`}>
+    <svg className="kids-staff" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`Pauta com ${notes.length === 1 ? 'uma nota' : `${notes.length} notas`}`}>
       {[10, 8, 6, 4, 2].map(step => <line key={step} x1="8" x2={width - 8} y1={y(step)} y2={y(step)} stroke="#24325f" strokeOpacity=".55" strokeWidth="1.6" />)}
       <text x="6" y={TOP + SL * 4 + 8} fontSize={SL * 5.6} fill="#24325f" fontFamily="'Segoe UI Symbol','Noto Music',serif">𝄞</text>
       {notes.map((name, i) => {
-        const step = STAFF_STEP[name] ?? 6;
+        const step = staffStep(name);
         const cx = LEFT + i * STEP_W + STEP_W / 2;
         const cy = y(step);
         const done = i < passed;
-        const color = done ? '#3cbf63' : colored ? noteInfo(name).color : '#24325f';
+        const color = tint[i] || (done ? '#3cbf63' : colored ? noteInfo(name).color : '#24325f');
         const up = step < 6;
+        const info = noteInfo(name);
         return (
           <g key={i}>
             {i === current && <circle cx={cx} cy={cy} r="17" fill="#ffc928" opacity=".35" className="kids-staff__halo" />}
             {step <= 0 && <line x1={cx - 15} x2={cx + 15} y1={y(0)} y2={y(0)} stroke="#24325f" strokeWidth="1.8" />}
+            {step >= 12 && <line x1={cx - 15} x2={cx + 15} y1={y(12)} y2={y(12)} stroke="#24325f" strokeWidth="1.8" />}
+            {name.includes('#') && <text x={cx - 26} y={cy + 6} fontSize="19" fontWeight="700" fill={color} fontFamily="'Segoe UI Symbol',serif">♯</text>}
             <ellipse cx={cx} cy={cy} rx="9.5" ry="7" transform={`rotate(-20 ${cx} ${cy})`} fill={color} />
             <line x1={up ? cx + 8.6 : cx - 8.6} x2={up ? cx + 8.6 : cx - 8.6} y1={cy + (up ? -2 : 2)} y2={up ? cy - SL * 3.4 : cy + SL * 3.4} stroke={color} strokeWidth="2.2" />
+            {labels && <text x={cx} y={height - 6} textAnchor="middle" fontSize="15" fontWeight="700" style={{ fill: info.black ? '#24325f' : `color-mix(in srgb, ${info.color} 75%, #24325f)` }} fontFamily="Fredoka, sans-serif">{info.name}</text>}
           </g>
         );
       })}
@@ -307,6 +341,38 @@ export function BubbleTrack({ notes, index, wiggle }) {
               <span className="kids-bubble__emoji">{info.emoji}</span>
               <span className="kids-bubble__name">{info.name}</span>
             </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * A scale drawn as a staircase: each note is a step as high as it sounds. reached: steps already played
+ * (solid, Nina stands on the last one); current: the step to play now; missing: a "?" step.
+ */
+export function ScaleStairs({ notes, reached = 0, current = -1, missing = -1, climber = true }) {
+  const midis = notes.map(noteMidi);
+  const low = Math.min(...midis);
+  const high = Math.max(...midis);
+  return (
+    <div className="kids-stairs" role="img" aria-label={`Escada com ${notes.length} notas`}>
+      {notes.map((name, i) => {
+        const info = noteInfo(name);
+        const rise = high === low ? 0.5 : (midis[i] - low) / (high - low);
+        const state = i === missing ? ' is-missing' : i < reached ? ' is-reached' : i === current ? ' is-current' : '';
+        return (
+          <div key={i} className={`kids-stairs__step${state}${info.black ? ' is-black' : ''}`} style={{ '--c': info.color, '--rise': rise }}>
+            {climber && reached > 0 && i === reached - 1 && <Mascot size={40} className="kids-stairs__climber" />}
+            <div className="kids-stairs__block">
+              {i === missing ? <strong>?</strong> : (
+                <>
+                  <span aria-hidden="true">{info.emoji}</span>
+                  <strong>{info.name}</strong>
+                </>
+              )}
+            </div>
           </div>
         );
       })}

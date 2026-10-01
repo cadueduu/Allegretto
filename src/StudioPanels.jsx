@@ -397,6 +397,7 @@ export function StudioFooter({ songCount }) {
       <span className="brand-mark" aria-hidden="true">A</span>
       <span className="studio-footer__name">Allegretto</span>
       <span className="studio-footer__meta">Piano de cauda no navegador · {songCount} peças · Tone.js, Web MIDI e WebRTC</span>
+      <span className="studio-footer__credit">Criado por <strong>Carlos Eduardo</strong></span>
     </footer>
   );
 }

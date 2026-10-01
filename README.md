@@ -20,7 +20,7 @@ Uma experiência completa de piano na web que combina **aprendizado musical**, *
 
 <br>
 
-### 🎵 18 Músicas • 🎮 4 Modos • 🌐 Multiplayer • 🎹 MIDI
+### 🎵 18 Músicas • 🎮 5 Modos • 🧒 Modo Infantil • 🌐 Multiplayer • 🎹 MIDI
 
 </div>
 
@@ -178,6 +178,28 @@ Uma experiência visual inspirada em visualizadores modernos de piano.
 * Funciona mesmo com a aba em segundo plano
 
 Cada nota cria uma barra luminosa que cresce enquanto permanece pressionada.
+
+---
+
+## 🧒 Modo Infantil
+
+Uma sala colorida, com teclas grandes, para crianças aprenderem música de verdade.
+
+### Trilha de aprendizado
+
+Lições curtas em sequência, no estilo dos aplicativos de idiomas, guiadas pela Nina, a notinha:
+
+* As notas e suas cores, e depois o piano sem cores (pelos grupos de teclas pretas)
+* Leitura de partitura: notas na pauta, linhas e espaços, mais aguda ou mais grave, ditado e músicas lidas na pauta, até o Sol agudo
+* Escalas: a escada das notas subindo e descendo, cinco dedinhos, vizinhos colados (Mi-Fá e Si-Dó), notas em ordem, escala na partitura e escala de Sol com Fá sustenido
+* Ouvido musical (grave e agudo, sobe e desce, papagaio), ritmo (tá, tá-a, ti-ti) e músicas inteiras
+
+O que a criança erra volta no fim da lição. Ganha XP, estrelas e um foguinho de dias seguidos.
+
+### Brincar
+
+* Descobrir as notas, achar a nota, músicas por cores
+* Treinos rápidos de partitura e de escalas
 
 ---
 
@@ -465,6 +487,8 @@ Compatível com instrumentos MIDI.
 # 🎹 Allegretto Piano
 
 ### Aprender música nunca foi tão divertido.
+
+Criado por **Carlos Eduardo**.
 
 Feito com ❤️ usando React, Tone.js, Web MIDI e WebRTC.
 

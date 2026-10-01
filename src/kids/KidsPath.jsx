@@ -43,7 +43,12 @@ export default function KidsPath({ path, onStart, onUnlockAll }) {
   const unlocked = index => path.unlockAll || index === 0 || done[ALL_LESSONS[index - 1].id] != null;
   const current = ALL_LESSONS.findIndex((lesson, index) => done[lesson.id] == null && unlocked(index));
   const currentRef = useRef(null);
-  useEffect(() => { currentRef.current?.scrollIntoView({ block: 'center' }); }, []);
+  // Bring the next lesson into view by scrolling the path itself (scrollIntoView would also nudge the room).
+  useEffect(() => {
+    const node = currentRef.current;
+    const stage = node?.closest('.kids-stage');
+    if (stage) stage.scrollTop = Math.max(0, node.offsetTop - stage.clientHeight / 2);
+  }, []);
 
   let index = -1;
   return (
@@ -96,6 +101,7 @@ export default function KidsPath({ path, onStart, onUnlockAll }) {
         <strong>Para os adultos:</strong> cada lição leva de 3 a 5 minutos. O que a criança erra volta no fim da lição, até acertar.
         A trilha abre uma lição por vez; se ela já sabe o básico, você pode{' '}
         <button type="button" className="kp-link" onClick={onUnlockAll}>{path.unlockAll ? 'voltar a abrir uma por vez' : 'liberar todas as lições'}</button>.
+        <br />Modo Infantil criado por Carlos Eduardo.
       </p>
     </div>
   );

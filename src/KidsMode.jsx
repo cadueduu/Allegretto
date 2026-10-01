@@ -4,6 +4,7 @@ import {
   kidKeyFor, noteInfo, pitchClass, speak,
 } from './kids/kidsShared.jsx';
 import KidsLesson from './kids/KidsLesson.jsx';
+import { PRACTICE } from './kids/curriculum.js';
 import KidsPath, { currentStreak, dayKey } from './kids/KidsPath.jsx';
 import './kids-mode.css';
 import './kids/kids-path.css';
@@ -49,9 +50,10 @@ function Explore({ pressRef, say, onComplete }) {
     pressRef.current = name => {
       const info = noteInfo(name);
       setLast({ name, at: performance.now() });
-      say(info.name);
       const pc = pitchClass(name);
       if (!NOTE_INFO[pc] || foundRef.current.has(pc)) return;
+      // The voice only names a note the first time it's found; after that the card on screen is enough.
+      say(`${info.name}, de ${info.word}!`);
       foundRef.current = new Set(foundRef.current).add(pc);
       setFound(foundRef.current);
       if (foundRef.current.size === WHITE_PCS.length) setTimeout(onComplete, 700);
@@ -108,7 +110,6 @@ function FindGame({ pressRef, say, onTargets, onJingle, onFinish }) {
       }
       setState('right');
       onJingle('success');
-      say('Isso!');
       timer.current = setTimeout(() => {
         if (round + 1 >= FIND_ROUNDS) { onFinish(missesRef.current); return; }
         setRound(round + 1);
@@ -262,7 +263,7 @@ export default function KidsMode({ activeNotes, pressHookRef, pointerHandlers, o
     pressHookRef.current = name => {
       const id = ++sparkId.current;
       const glyph = ['♪', '♫', '♩', '★'][id % 4];
-      setSparks(list => [...list.slice(-10), { id, key: kidKeyFor(name), glyph }]);
+      setSparks(list => [...list.slice(-10), { id, note: name, glyph }]);
       setTimeout(() => setSparks(list => list.filter(s => s.id !== id)), 900);
       if (!celebration) activityPress.current?.(name);
     };
@@ -301,14 +302,15 @@ export default function KidsMode({ activeNotes, pressHookRef, pointerHandlers, o
     setLesson(null);
   };
   const finishLesson = ({ stars: earned, xp }) => {
-    const id = lesson.lesson.id;
+    const { id, practice } = lesson.lesson;
     setPath(prev => {
       const today = dayKey();
       const last = prev.streak?.last;
       const kept = last === today ? prev.streak : { count: last === dayKey(-1) ? (prev.streak?.count || 0) + 1 : 1, last: today };
       return {
         ...prev,
-        done: { ...prev.done, [id]: Math.max(prev.done?.[id] || 0, earned) },
+        // Free practice earns XP and keeps the streak, but doesn't tick off a lesson on the path.
+        done: practice ? prev.done : { ...prev.done, [id]: Math.max(prev.done?.[id] || 0, earned) },
         xp: (prev.xp || 0) + xp,
         streak: kept,
         today: { day: today, count: (prev.today?.day === today ? prev.today.count : 0) + 1 },
@@ -317,7 +319,6 @@ export default function KidsMode({ activeNotes, pressHookRef, pointerHandlers, o
     leaveLesson();
   };
 
-  const lit = new Set([...activeNotes].map(kidKeyFor));
   const targets = new Set();
   if (targetNote) {
     if (/\d/.test(targetNote)) targets.add(kidKeyFor(targetNote));
@@ -327,7 +328,7 @@ export default function KidsMode({ activeNotes, pressHookRef, pointerHandlers, o
   if (lesson) {
     return (
       <div className="kids-mode" role="dialog" aria-modal="true" aria-label={`Lição: ${lesson.lesson.title}`}>
-        <KidsLesson key={round} lesson={lesson.lesson} unit={lesson.unit} lit={lit} sparks={sparks} pointerHandlers={pointerHandlers}
+        <KidsLesson key={round} lesson={lesson.lesson} unit={lesson.unit} active={activeNotes} sparks={sparks} pointerHandlers={pointerHandlers}
           pressRef={activityPress} sound={sound} say={say} demoBeat={demoBeat} demoPlaying={demoPlaying}
           onQuit={leaveLesson} onComplete={finishLesson} />
       </div>
@@ -392,9 +393,19 @@ export default function KidsMode({ activeNotes, pressHookRef, pointerHandlers, o
                 <StarRow count={Math.round(KIDS_SONGS.reduce((sum, s) => sum + (stars[`song-${s.id}`] || 0), 0) / KIDS_SONGS.length)} />
               </button>
             </div>
+            <h2 className="kids-subhead">Treinos rápidos</h2>
+            <div className="kids-cards kids-cards--two">
+              {[PRACTICE.reading, PRACTICE.scales].map(practice => (
+                <button type="button" key={practice.id} className="kids-card kids-card--row" style={{ '--c': practice.unit.color }} onClick={() => startLesson(practice, practice.unit)}>
+                  <span className="kids-card__art" aria-hidden="true">{practice.icon}</span>
+                  <strong>{practice.title}</strong>
+                  <span>{practice.id === 'practice-reading' ? 'Notas na pauta, linhas e espaços e pedaços de músicas' : 'Escadas subindo e descendo, notas que faltam e vizinhos'}</span>
+                </button>
+              ))}
+            </div>
             <p className="kids-parents">
               <strong>Para os adultos:</strong> funciona com toque na tela, mouse, teclado do computador (<kbd>Z</kbd> a <kbd>Q</kbd>) e teclado MIDI.
-              A voz fala o nome das notas. Estrelas e progresso ficam salvos neste aparelho.
+              Estrelas e progresso ficam salvos neste aparelho. Modo Infantil criado por Carlos Eduardo.
             </p>
           </div>
         )}
@@ -420,7 +431,7 @@ export default function KidsMode({ activeNotes, pressHookRef, pointerHandlers, o
         )}
       </main>
 
-      {screen !== 'path' && <KidsKeyboard lit={lit} targets={targets} pointerHandlers={pointerHandlers} sparks={sparks} />}
+      {screen !== 'path' && <KidsKeyboard active={activeNotes} targets={targets} pointerHandlers={pointerHandlers} sparks={sparks} />}
 
       {celebration && (
         <Celebration title={celebration.title} text={celebration.text} stars={celebration.stars}
