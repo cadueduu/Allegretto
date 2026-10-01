@@ -600,6 +600,7 @@ export default function PianoMidi() {
   const [composerSelDur, setComposerSelDur] = useState(1);
   const [composerPlaying,setComposerPlaying]= useState(false);
   const [composerPlayIdx,setComposerPlayIdx]= useState(-1);
+  const [composerBass,   setComposerBass]   = useState([]); // left hand [{ name, start, dur }] for songs that have one
   const [composerSaved,  setComposerSaved]  = useState(false);
   // Follow mode (partitura livre — notas caindo)
   const [followState,    setFollowState]    = useState('idle'); // idle|countdown|playing|complete
@@ -683,6 +684,8 @@ export default function PianoMidi() {
   const composerNotesRef   = useRef([]);
   const composerBpmRef     = useRef(90);
   const composerTimeSigRef = useRef('4/4');
+  const composerBassRef    = useRef([]);
+  const composerNoteXRef   = useRef([]); // x of each melody note on the staff, for auto-scroll
   const composerTimersRef     = useRef([]);
   const composerRailRef       = useRef(null);
 
@@ -940,6 +943,18 @@ export default function PianoMidi() {
   useEffect(() => { composerNotesRef.current   = composerNotes;   }, [composerNotes]);
   useEffect(() => { composerBpmRef.current     = composerBpm;     }, [composerBpm]);
   useEffect(() => { composerTimeSigRef.current = composerTimeSig; }, [composerTimeSig]);
+  useEffect(() => { composerBassRef.current = composerBass; }, [composerBass]);
+  // A newly loaded song starts at its first measure, wherever the previous one was scrolled to.
+  // (An effect rather than requestAnimationFrame, which never fires while the tab is hidden.)
+  const [songLoadSeq, setSongLoadSeq] = useState(0);
+  useEffect(() => { if (composerRailRef.current) composerRailRef.current.scrollLeft = 0; }, [songLoadSeq]);
+  // Keep the note being played in view while "Ouvir" runs.
+  useEffect(() => {
+    if (composerPlayIdx < 0) return;
+    const rail = composerRailRef.current;
+    const x = composerNoteXRef.current[composerPlayIdx];
+    if (rail && x != null) rail.scrollTo({ left: Math.max(0, x - rail.clientWidth * 0.3), behavior: 'smooth' });
+  }, [composerPlayIdx]);
   useEffect(() => {
     freeModePlayRef.current = (noteName) => {
       if (!freeModeRef.current) return;
@@ -1047,32 +1062,45 @@ export default function PianoMidi() {
     try { synthRef.current?.releaseAll(); } catch(e) {}
     setComposerPlaying(false);
     setComposerPlayIdx(-1);
+    // Playback may stop mid-note: unlight its keys and let its bars float away.
+    setActiveNotes(new Set());
+    const now = performance.now();
+    risingBarsRef.current = risingBarsRef.current.map(b => (b.released ? b : { ...b, released: true, releaseTime: now }));
   }, []);
 
-  const playComposer = useCallback(async (notes, bpm) => {
-    if (!notes.length) return;
+  const playComposer = useCallback(async (notes, bpm, bass = []) => {
+    if (!notes.length && !bass.length) return;
     await ensureAudio();
     composerTimersRef.current.forEach(clearTimeout);
     composerTimersRef.current = [];
     try { synthRef.current?.releaseAll(); } catch(e) {}
     setComposerPlaying(true);
     const beatMs = 60000 / bpm;
+    const later = (fn, ms) => composerTimersRef.current.push(setTimeout(fn, ms));
     let t = 0;
     notes.forEach((note, i) => {
-      const start = t;
       const durMs = note.dur * beatMs * 0.88;
-      const t1 = setTimeout(() => {
+      later(() => {
         setComposerPlayIdx(i);
-        if (note.name !== 'rest') {
-          try { synthRef.current?.triggerAttack(note.name); } catch(e) {}
-          setTimeout(() => { try { synthRef.current?.triggerRelease(note.name); } catch(e) {} }, durMs);
-        }
-      }, start);
-      composerTimersRef.current.push(t1);
+        if (note.name === 'rest') return;
+        try { synthRef.current?.triggerAttack(note.name); } catch(e) {}
+        // Light the key and send a bar up the stage, so the eye follows what the ear hears.
+        setActiveNotes(prev => new Set(prev).add(note.name));
+        createFreeModeBarRef.current?.(note.name, null);
+        later(() => {
+          try { synthRef.current?.triggerRelease(note.name); } catch(e) {}
+          setActiveNotes(prev => { const s = new Set(prev); s.delete(note.name); return s; });
+          releaseFreeModeBarRef.current?.(note.name);
+        }, durMs);
+      }, t);
       t += note.dur * beatMs;
     });
-    const done = setTimeout(() => { setComposerPlaying(false); setComposerPlayIdx(-1); }, t);
-    composerTimersRef.current.push(done);
+    // Left hand, a little softer so the melody stays on top.
+    bass.forEach(b => later(() => {
+      try { synthRef.current?.triggerAttackRelease(b.name, (b.dur * beatMs * 0.95) / 1000, undefined, 0.5); } catch(e) {}
+    }, b.start * beatMs));
+    const end = Math.max(t, ...bass.map(b => (b.start + b.dur) * beatMs));
+    later(() => { setComposerPlaying(false); setComposerPlayIdx(-1); }, end);
   }, [ensureAudio]);
 
   const addComposerNote = useCallback((noteName, dur) => {
@@ -1103,6 +1131,8 @@ export default function PianoMidi() {
     if (msg.timeSig) setComposerTimeSig(msg.timeSig);
     setComposerMode(true); setComposerSaved(true);
     setFreeSong(msg.title ? { title: msg.title, artist: msg.artist } : null);
+    setComposerBass(msg.bass || []);
+    setSongLoadSeq(n => n + 1);
   }
 
   function mpSetupHostHandlers(conn) {
@@ -1128,7 +1158,7 @@ export default function PianoMidi() {
           }
           // Sync compositor state
           if (composerModeRef.current) {
-            try { conn.send({ type: 'composer_sync', notes: composerNotesRef.current, bpm: composerBpmRef.current, timeSig: composerTimeSigRef.current, saved: composerSavedRef.current, song: freeSongRef.current }); } catch(e) {}
+            try { conn.send({ type: 'composer_sync', notes: composerNotesRef.current, bpm: composerBpmRef.current, timeSig: composerTimeSigRef.current, saved: composerSavedRef.current, song: freeSongRef.current, bass: composerBassRef.current }); } catch(e) {}
           }
         }, 100);
       } else if (msg.type === 'note_on') {
@@ -1163,10 +1193,10 @@ export default function PianoMidi() {
         mpBroadcastAll({ type: 'sheet_stop' }, conn.peer);
       } else if (msg.type === 'composer_enter') {
         if (!freeModeRef.current) setFreeMode(true);
-        setComposerMode(true); setComposerSaved(false); setFreeSong(null);
+        setComposerMode(true); setComposerSaved(false); setFreeSong(null); setComposerBass([]);
         mpBroadcastAll({ type: 'composer_enter' }, conn.peer);
       } else if (msg.type === 'composer_exit') {
-        setComposerMode(false); setComposerSaved(false); setFreeSong(null);
+        setComposerMode(false); setComposerSaved(false); setFreeSong(null); setComposerBass([]);
         mpBroadcastAll({ type: 'composer_exit' }, conn.peer);
       } else if (msg.type === 'composer_note_add') {
         setComposerNotes(p => [...p, msg.note]);
@@ -1175,7 +1205,7 @@ export default function PianoMidi() {
         setComposerNotes(p => p.filter(n => n.id !== msg.noteId));
         mpBroadcastAll({ type: 'composer_note_delete', noteId: msg.noteId }, conn.peer);
       } else if (msg.type === 'composer_clear') {
-        setComposerNotes([]);
+        setComposerNotes([]); setComposerBass([]);
         mpBroadcastAll({ type: 'composer_clear' }, conn.peer);
       } else if (msg.type === 'composer_bpm') {
         setComposerBpm(msg.bpm);
@@ -1193,7 +1223,7 @@ export default function PianoMidi() {
         mpApplySongLoad(msg);
         mpBroadcastAll(msg, conn.peer);
       } else if (msg.type === 'follow_start') {
-        setTimeout(() => startFollowRef.current?.(composerNotesRef.current, composerBpmRef.current), 0);
+        setTimeout(() => startFollowRef.current?.(composerNotesRef.current, composerBpmRef.current, composerBassRef.current), 0);
         mpBroadcastAll({ type: 'follow_start' }, conn.peer);
       } else if (msg.type === 'follow_stop') {
         stopFollowRef.current?.();
@@ -1207,6 +1237,7 @@ export default function PianoMidi() {
         if (msg.timeSig) setComposerTimeSig(msg.timeSig);
         if (msg.saved) setComposerSaved(true);
         setFreeSong(msg.song || null);
+        setComposerBass(msg.bass || []);
       }
     });
     conn.on('close', () => {
@@ -1299,15 +1330,15 @@ export default function PianoMidi() {
                 stopSheetRef.current?.();
               } else if (msg.type === 'composer_enter') {
                 if (!freeModeRef.current) setFreeMode(true);
-                setComposerMode(true); setComposerSaved(false); setFreeSong(null);
+                setComposerMode(true); setComposerSaved(false); setFreeSong(null); setComposerBass([]);
               } else if (msg.type === 'composer_exit') {
-                setComposerMode(false); setComposerSaved(false); setFreeSong(null);
+                setComposerMode(false); setComposerSaved(false); setFreeSong(null); setComposerBass([]);
               } else if (msg.type === 'composer_note_add') {
                 setComposerNotes(p => [...p, msg.note]);
               } else if (msg.type === 'composer_note_delete') {
                 setComposerNotes(p => p.filter(n => n.id !== msg.noteId));
               } else if (msg.type === 'composer_clear') {
-                setComposerNotes([]);
+                setComposerNotes([]); setComposerBass([]);
               } else if (msg.type === 'composer_bpm') {
                 setComposerBpm(msg.bpm);
               } else if (msg.type === 'composer_timesig') {
@@ -1320,7 +1351,7 @@ export default function PianoMidi() {
               } else if (msg.type === 'song_load') {
                 mpApplySongLoad(msg);
               } else if (msg.type === 'follow_start') {
-                setTimeout(() => startFollowRef.current?.(composerNotesRef.current, composerBpmRef.current), 0);
+                setTimeout(() => startFollowRef.current?.(composerNotesRef.current, composerBpmRef.current, composerBassRef.current), 0);
               } else if (msg.type === 'follow_stop') {
                 stopFollowRef.current?.();
               } else if (msg.type === 'composer_sync') {
@@ -1331,6 +1362,7 @@ export default function PianoMidi() {
                 if (msg.timeSig) setComposerTimeSig(msg.timeSig);
                 if (msg.saved) setComposerSaved(true);
                 setFreeSong(msg.song || null);
+                setComposerBass(msg.bass || []);
               }
           });
           conn.on('close', () => { setMpStatus('Host desconectou.'); leaveRoom(); });
@@ -1709,7 +1741,7 @@ export default function PianoMidi() {
   // ---------------------------------------------------------------
   // Start / stop follow mode
   // ---------------------------------------------------------------
-  const startFollow = useCallback(async (notes, bpm) => {
+  const startFollow = useCallback(async (notes, bpm, bass = []) => {
     if (!notes || !notes.length) return;
     await ensureAudio();
 
@@ -1768,6 +1800,10 @@ export default function PianoMidi() {
       setFollowState('playing');
     }, COUNTDOWN_MS);
     followCdownTimers.current = [t1, t2, t3];
+    // The left hand plays itself as accompaniment, on the same clock as the falling melody.
+    bass.forEach(b => followCdownTimers.current.push(setTimeout(() => {
+      try { synthRef.current?.triggerAttackRelease(b.name, (b.dur * beatDur * 0.95) / 1000, undefined, 0.5); } catch(e) {}
+    }, COUNTDOWN_MS + b.start * beatDur)));
 
     followRafRef.current = requestAnimationFrame(() => followLoopRef.current?.());
   }, [ensureAudio]);
@@ -1928,14 +1964,15 @@ export default function PianoMidi() {
   const loadSongIntoFree = (song) => {
     const stamp = Date.now();
     const notes = song.notes.map((n, i) => { const p = parseNote(n); return { id: `song-${stamp}-${i}`, name: p.name, dur: p.dur }; });
-    const msg = { type: 'song_load', notes, bpm: song.bpm || 90, timeSig: song.timeSignature || '4/4', title: song.title, artist: song.artist };
+    const bass = (song.bass || []).map(([name, start, dur]) => ({ name, start, dur }));
+    const msg = { type: 'song_load', notes, bass, bpm: song.bpm || 90, timeSig: song.timeSignature || '4/4', title: song.title, artist: song.artist };
     stopComposer();
     mpApplySongLoad(msg);
     setFreePickerOpen(false);
     mpBroadStateRef.current?.(msg);
   };
   // "Acompanhar" starts for the whole room at once; each player keeps their own score.
-  const startGroupFollow = () => { startFollow(composerNotes, composerBpm); mpBroadStateRef.current?.({ type: 'follow_start' }); };
+  const startGroupFollow = () => { startFollow(composerNotes, composerBpm, composerBass); mpBroadStateRef.current?.({ type: 'follow_start' }); };
   const stopGroupFollow  = () => { stopFollow(); mpBroadStateRef.current?.({ type: 'follow_stop' }); };
   const restartSong = () => { setCurrentNoteIndex(0); setSongComplete(false); };
   const closeSong   = () => { setCurrentSong(null); setCurrentNoteIndex(0); setSongComplete(false); stopTraining(); setTrainingMode(false); stopSheet(); setSheetMode(false); };
@@ -2655,7 +2692,7 @@ export default function PianoMidi() {
           <div className="free-header">
             <div className="free-header__left">
               <button onClick={() => {
-                if (composerMode) { stopComposer(); stopFollow(); setComposerSaved(false); setComposerMode(false); setFreeSong(null); mpBroadStateRef.current?.({ type: 'composer_exit' }); }
+                if (composerMode) { stopComposer(); stopFollow(); setComposerSaved(false); setComposerMode(false); setFreeSong(null); setComposerBass([]); mpBroadStateRef.current?.({ type: 'composer_exit' }); }
                 else { setFreeMode(false); risingBarsRef.current=[]; setKeyClickCounts(new Map()); }
               }} aria-label={composerMode ? 'Sair do compositor' : 'Sair do Modo Livre'} className="free-close">
                 <X size={15}/>
@@ -2689,13 +2726,13 @@ export default function PianoMidi() {
                     {['4/4','3/4','2/4','6/8','3/8'].map(ts => <option key={ts} value={ts} style={{background:'#1a1410'}}>{ts}</option>)}
                   </select>
                   {/* Play / Stop */}
-                  <button onClick={() => composerPlaying ? stopComposer() : playComposer(composerNotes, composerBpm)}
+                  <button onClick={() => composerPlaying ? stopComposer() : playComposer(composerNotes, composerBpm, composerBass)}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-colors"
                     style={{ background:composerPlaying?'rgba(224,124,94,.15)':'linear-gradient(135deg,#d4b06a,#a9823e)', border:composerPlaying?'1px solid rgba(224,124,94,.35)':'none', color:composerPlaying?'#e07c5e':'#1a1108', fontWeight:600 }}>
                     {composerPlaying ? <><Square size={11}/> Parar</> : <><Play size={11}/> Ouvir</>}
                   </button>
                   {/* Clear */}
-                  <button onClick={() => { stopComposer(); setComposerNotes([]); mpBroadStateRef.current?.({ type:'composer_clear' }); }} className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs transition-colors" style={{ background:'rgba(255,255,255,.05)', border:'1px solid rgba(255,255,255,.08)', color:'#6b6052' }}>
+                  <button onClick={() => { stopComposer(); setComposerNotes([]); setComposerBass([]); mpBroadStateRef.current?.({ type:'composer_clear' }); }} className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs transition-colors" style={{ background:'rgba(255,255,255,.05)', border:'1px solid rgba(255,255,255,.08)', color:'#6b6052' }}>
                     <Trash2 size={11}/> Limpar
                   </button>
                   {/* Salvar partitura → abre dialog */}
@@ -2710,7 +2747,7 @@ export default function PianoMidi() {
               ) : composerSaved ? (
                 <>
                   {/* Ouvir partitura salva */}
-                  <button onClick={() => composerPlaying ? stopComposer() : playComposer(composerNotes, composerBpm)}
+                  <button onClick={() => composerPlaying ? stopComposer() : playComposer(composerNotes, composerBpm, composerBass)}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-colors"
                     style={{ background:composerPlaying?'rgba(224,124,94,.15)':'linear-gradient(135deg,#d4b06a,#a9823e)', border:composerPlaying?'1px solid rgba(224,124,94,.35)':'none', color:composerPlaying?'#e07c5e':'#1a1108', fontWeight:600 }}>
                     {composerPlaying ? <><Square size={11}/> Parar</> : <><Play size={11}/> Ouvir</>}
@@ -2756,7 +2793,7 @@ export default function PianoMidi() {
                   <button onClick={() => setFreePickerOpen(true)} className="free-chip free-chip--amber">
                     <ListMusic size={13}/> Músicas
                   </button>
-                  <button onClick={() => { setComposerMode(true); setFreeSong(null); mpBroadStateRef.current?.({ type: 'composer_enter' }); }} className="free-chip">
+                  <button onClick={() => { setComposerMode(true); setFreeSong(null); setComposerBass([]); mpBroadStateRef.current?.({ type: 'composer_enter' }); }} className="free-chip">
                     <PenLine size={13}/> Criar Partitura
                   </button>
                   <button onClick={() => setMpOpen(true)} className={`free-chip${mpInRoom ? ' free-chip--live' : ''}`}>
@@ -2767,112 +2804,171 @@ export default function PianoMidi() {
             </div>
           </div>
 
-          {/* ── PARTITURA: altura fixa no topo, só quando composerMode ── */}
+          {/* ── PARTITURA: pauta dupla (sol + fá) no topo, só quando composerMode ── */}
           {composerMode && (() => {
             const [sigNum, sigDen] = composerTimeSig.split('/').map(Number);
             const beatsPerMeasure = sigNum * (4 / sigDen);
             const PX = 68;
-            const LEFT = 84;
-            const SL = STAFF_LINE_SPACING;
-            const ST = STAFF_TOP;
-            const lineYs = [ST, ST+SL, ST+SL*2, ST+SL*3, ST+SL*4];
-            const ledgerBelow  = ST + SL*5;
-            const ledger1Above = ST - SL;
-            const ledger2Above = ST - SL*2;
-            const totalBeats = composerNotes.reduce((s, n) => s + n.dur, 0);
+            const LEFT = 100;
+            // Tighter than the lesson staff so both clefs fit above the stage; glyphs scale with it.
+            const SL = 11;
+            const k = SL / STAFF_LINE_SPACING;
+            const TT = 34;              // treble top line (F5)
+            const TB = TT + SL * 4;     // treble bottom line (E4)
+            const BT = TB + SL * 3.5;   // bass top line (A3); middle C's ledger sits between the staves
+            const BB = BT + SL * 4;     // bass bottom line (G2)
+            const SVG_H = BB + SL * 3.4;
+            const STAFF_X = 24;
+            const trebleY = name => TT + (10 - (NOTE_STAFF_STEPS[name] ?? 6)) * (SL / 2);
+            // Diatonic position (C0 = 0), so the bass staff can place any note: G2 = 18 sits on the bottom line.
+            const diatonic = name => { const m = name.match(/^([A-G])#?(-?\d)$/); return m ? Number(m[2]) * 7 + 'CDEFGAB'.indexOf(m[1]) : 18; };
+            const bassY = name => BB - (diatonic(name) - 18) * (SL / 2);
+
+            const noteGlyph = ({ key, x, heads, dur, clr, stemDown, ledgers, halo, extra, onClick, cursor }) => {
+              const isWhole  = dur >= 3.6;
+              const isHalf   = !isWhole && dur >= 1.8;
+              const is16th   = !isWhole && !isHalf && dur < 0.4;
+              const isEighth = !isWhole && !isHalf && !is16th && dur < 0.85;
+              const rx = 6.5 * k, ry = 5 * k, stemLen = 30 * k;
+              const top = Math.min(...heads.map(h => h.y));
+              const bottom = Math.max(...heads.map(h => h.y));
+              const stemX = stemDown ? x - rx + 0.6 : x + rx - 0.6;
+              const stemFrom = stemDown ? top : bottom;
+              const stemTo = stemDown ? bottom + stemLen : top - stemLen;
+              const dir = stemDown ? -1 : 1;
+              const flag = y0 => `M${stemX},${y0} C${stemX + 14 * k},${y0 + dir * 8 * k} ${stemX + 15 * k},${y0 + dir * 16 * k} ${stemX + 2 * k},${y0 + dir * 22 * k}`;
+              return (
+                <g key={key} onClick={onClick} style={{ cursor }}>
+                  <rect x={x - 14} y={Math.min(top, stemTo) - 4} width={28} height={Math.abs(stemTo - stemFrom) + (bottom - top) + 12} fill="transparent"/>
+                  {halo && heads.map((h, i) => <circle key={`o${i}`} cx={x} cy={h.y} r={11 * k + 3} fill="#d4b06a" opacity="0.2"/>)}
+                  {ledgers.map((y, i) => <line key={`l${i}`} x1={x - 10 * k} y1={y} x2={x + 10 * k} y2={y} stroke={clr} strokeWidth="1.3"/>)}
+                  {heads.map((h, i) => h.sharp && <text key={`s${i}`} x={x - 18 * k} y={h.y + 5 * k} fill={clr} fontSize={12 * k + 2} fontFamily="serif" style={{ pointerEvents:'none' }}>♯</text>)}
+                  {heads.map((h, i) => (isWhole || isHalf)
+                    ? <ellipse key={`h${i}`} cx={x} cy={h.y} rx={isWhole ? 7.5 * k : rx} ry={isWhole ? 5.5 * k : ry} stroke={clr} strokeWidth="1.7" fill="none"/>
+                    : <ellipse key={`h${i}`} cx={x} cy={h.y} rx={rx} ry={ry} fill={clr}/>)}
+                  {!isWhole && <line x1={stemX} y1={stemFrom} x2={stemX} y2={stemTo} stroke={clr} strokeWidth="1.4"/>}
+                  {(isEighth || is16th) && <path d={flag(stemTo)} stroke={clr} strokeWidth="1.4" fill="none"/>}
+                  {is16th && <path d={flag(stemTo + dir * 7 * k)} stroke={clr} strokeWidth="1.4" fill="none"/>}
+                  {extra}
+                </g>
+              );
+            };
+
+            // ── Right hand (treble): the melody, one note after another ──
             const noteEls = [];
+            const barBeats = [];
+            const melodyStarts = [];
+            const xs = [];
+            const editable = !composerPlaying && !composerSaved;
             let cum = 0;
             let gapAcc = 0;
             const BARLINE_PAD = 20;
             composerNotes.forEach((note, i) => {
               const nx  = LEFT + cum * PX + gapAcc;
+              xs[i] = nx;
+              melodyStarts[i] = cum;
               const isPlay = composerPlayIdx === i;
-              const isRest = note.name === 'rest';
               const clr = isPlay ? '#d4b06a' : '#e8dfd0';
               const dur = note.dur;
-              if (!isRest) {
-                const step   = NOTE_STAFF_STEPS[note.name] ?? 6;
-                const ny     = ST + (10 - step) * (SL / 2);
-                const stemDn = step > 6;
-                const isWhole   = dur >= 3.6;
-                const isHalf    = !isWhole && dur >= 1.8;
-                const is16th    = !isWhole && !isHalf && dur < 0.4;
-                const isEighth  = !isWhole && !isHalf && !is16th && dur < 0.85;
-                const hasSharp  = note.name.includes('#');
-                const stemX  = stemDn ? nx - 5.5 : nx + 5.5;
-                const stemY2 = stemDn ? ny + 30  : ny - 30;
-                noteEls.push(
-                  <g key={note.id} onClick={() => { if (!composerPlaying && !composerSaved) deleteComposerNote(note.id); }} style={{ cursor:(composerPlaying||composerSaved)?'default':'pointer' }}>
-                    <rect x={nx-14} y={Math.min(ny,stemY2)-4} width={28} height={Math.abs(stemY2-ny)+30} fill="transparent"/>
-                    {isPlay && <circle cx={nx} cy={ny} r={14} fill="#d4b06a" opacity="0.18"/>}
-                    {step <= 0  && <line x1={nx-10} y1={ledgerBelow}  x2={nx+10} y2={ledgerBelow}  stroke={clr} strokeWidth="1.5"/>}
-                    {step >= 12 && <line x1={nx-10} y1={ledger1Above} x2={nx+10} y2={ledger1Above} stroke={clr} strokeWidth="1.5"/>}
-                    {step >= 14 && <line x1={nx-10} y1={ledger2Above} x2={nx+10} y2={ledger2Above} stroke={clr} strokeWidth="1.5"/>}
-                    {hasSharp && <text x={nx-17} y={ny+5} fill={clr} fontSize="12" fontFamily="serif" style={{pointerEvents:'none'}}>♯</text>}
-                    {isWhole
-                      ? <ellipse cx={nx} cy={ny} rx={7.5} ry={5.5} stroke={clr} strokeWidth="2"   fill="none"/>
-                      : isHalf
-                      ? <ellipse cx={nx} cy={ny} rx={6.5} ry={5}   stroke={clr} strokeWidth="1.8" fill="none"/>
-                      : <ellipse cx={nx} cy={ny} rx={6.5} ry={5}   fill={clr}/>
-                    }
-                    {!composerPlaying && !composerSaved && !isPlay && <text x={nx+9} y={ny-9} fill="rgba(224,124,94,0.6)" fontSize="9" fontWeight="bold" style={{pointerEvents:'none'}}>×</text>}
-                    {!isWhole && <line x1={stemX} y1={ny} x2={stemX} y2={stemY2} stroke={clr} strokeWidth="1.5"/>}
-                    {isEighth && (stemDn
-                      ? <path d={`M${stemX},${stemY2} C${stemX+14},${stemY2-8} ${stemX+15},${stemY2-16} ${stemX+2},${stemY2-22}`} stroke={clr} strokeWidth="1.5" fill="none"/>
-                      : <path d={`M${stemX},${stemY2} C${stemX+14},${stemY2+8} ${stemX+15},${stemY2+16} ${stemX+2},${stemY2+22}`} stroke={clr} strokeWidth="1.5" fill="none"/>
-                    )}
-                    {is16th && (stemDn ? <>
-                      <path d={`M${stemX},${stemY2}   C${stemX+14},${stemY2-8}  ${stemX+15},${stemY2-16} ${stemX+2},${stemY2-22}`} stroke={clr} strokeWidth="1.5" fill="none"/>
-                      <path d={`M${stemX},${stemY2-7} C${stemX+14},${stemY2-15} ${stemX+15},${stemY2-23} ${stemX+2},${stemY2-29}`} stroke={clr} strokeWidth="1.5" fill="none"/>
-                    </> : <>
-                      <path d={`M${stemX},${stemY2}   C${stemX+14},${stemY2+8}  ${stemX+15},${stemY2+16} ${stemX+2},${stemY2+22}`} stroke={clr} strokeWidth="1.5" fill="none"/>
-                      <path d={`M${stemX},${stemY2+7} C${stemX+14},${stemY2+15} ${stemX+15},${stemY2+23} ${stemX+2},${stemY2+29}`} stroke={clr} strokeWidth="1.5" fill="none"/>
-                    </>)}
-                  </g>
-                );
+              const onClick = () => { if (editable) deleteComposerNote(note.id); };
+              const cursor = editable ? 'pointer' : 'default';
+              if (note.name !== 'rest') {
+                const step = NOTE_STAFF_STEPS[note.name] ?? 6;
+                const ny = trebleY(note.name);
+                const ledgers = [];
+                if (step <= 0)  ledgers.push(TB + SL);
+                if (step >= 12) ledgers.push(TT - SL);
+                if (step >= 14) ledgers.push(TT - SL * 2);
+                noteEls.push(noteGlyph({
+                  key: note.id, x: nx, heads: [{ y: ny, sharp: note.name.includes('#') }], dur, clr, stemDown: step > 6, ledgers, halo: isPlay, onClick, cursor,
+                  extra: editable && !isPlay ? <text x={nx + 9} y={ny - 9} fill="rgba(224,124,94,0.6)" fontSize="9" fontWeight="bold" style={{ pointerEvents:'none' }}>×</text> : null,
+                }));
               } else {
                 const rc = isPlay ? '#d4b06a' : '#a89a87';
-                const ry = ST + SL*2;
+                const ry = TT + SL * 2;
                 noteEls.push(
-                  <g key={note.id} onClick={() => { if (!composerPlaying && !composerSaved) deleteComposerNote(note.id); }} style={{ cursor:(composerPlaying||composerSaved)?'default':'pointer' }}>
-                    <rect x={nx-12} y={ry-10} width={24} height={28} fill="transparent"/>
-                    {dur >= 3.6 && <rect x={nx-7} y={ST+SL} width={14} height={5} fill={rc}/>}
-                    {dur >= 1.8 && dur < 3.6 && <rect x={nx-7} y={ST+SL*2-5} width={14} height={5} fill={rc}/>}
-                    {dur >= 0.85 && dur < 1.8 && <text x={nx-5} y={ST+SL*2+10} fill={rc} fontSize="20" fontFamily="serif" style={{pointerEvents:'none'}}>𝄽</text>}
-                    {dur >= 0.4  && dur < 0.85 && <text x={nx-4} y={ST+SL*2+8}  fill={rc} fontSize="16" fontFamily="serif" style={{pointerEvents:'none'}}>𝄾</text>}
-                    {dur <  0.4  && <text x={nx-4} y={ST+SL*2+10} fill={rc} fontSize="18" fontFamily="serif" style={{pointerEvents:'none'}}>𝄿</text>}
-                    {!composerPlaying && !composerSaved && !isPlay && <text x={nx+11} y={ry-1} fill="rgba(224,124,94,0.6)" fontSize="9" fontWeight="bold" style={{pointerEvents:'none'}}>×</text>}
+                  <g key={note.id} onClick={onClick} style={{ cursor }}>
+                    <rect x={nx - 12} y={ry - 10} width={24} height={28} fill="transparent"/>
+                    {dur >= 3.6 && <rect x={nx - 6} y={TT + SL} width={12} height={4} fill={rc}/>}
+                    {dur >= 1.8 && dur < 3.6 && <rect x={nx - 6} y={TT + SL * 2 - 4} width={12} height={4} fill={rc}/>}
+                    {dur >= 0.85 && dur < 1.8 && <text x={nx - 5} y={TT + SL * 2 + 9} fill={rc} fontSize={20 * k + 2} fontFamily="serif" style={{ pointerEvents:'none' }}>𝄽</text>}
+                    {dur >= 0.4  && dur < 0.85 && <text x={nx - 4} y={TT + SL * 2 + 7} fill={rc} fontSize={16 * k + 2} fontFamily="serif" style={{ pointerEvents:'none' }}>𝄾</text>}
+                    {dur <  0.4  && <text x={nx - 4} y={TT + SL * 2 + 9} fill={rc} fontSize={18 * k + 2} fontFamily="serif" style={{ pointerEvents:'none' }}>𝄿</text>}
+                    {editable && !isPlay && <text x={nx + 11} y={ry - 1} fill="rgba(224,124,94,0.6)" fontSize="9" fontWeight="bold" style={{ pointerEvents:'none' }}>×</text>}
                   </g>
                 );
               }
               cum += dur;
               if (Math.abs(cum % beatsPerMeasure) < 0.01 && i < composerNotes.length - 1) {
                 const bx = LEFT + cum * PX + gapAcc + 8;
-                noteEls.push(<line key={`bl-${i}`} x1={bx} y1={ST-4} x2={bx} y2={ST+SL*4+4} stroke="rgba(255,255,255,0.35)" strokeWidth="1.5"/>);
+                // Barlines run through both staves, like a piano score.
+                noteEls.push(<line key={`bl-${i}`} x1={bx} y1={TT} x2={bx} y2={BB} stroke="rgba(255,255,255,0.3)" strokeWidth="1.3"/>);
+                barBeats.push(cum);
                 gapAcc += BARLINE_PAD;
               }
             });
-            const svgW = Math.max(560, LEFT + totalBeats * PX + gapAcc + 80);
+            composerNoteXRef.current = xs;
+            const beatToX = beat => LEFT + beat * PX + BARLINE_PAD * barBeats.filter(b => b <= beat + 1e-6).length;
+
+            // ── Left hand (bass): chords grouped by start beat, one stem per chord ──
+            const playBeat = composerPlayIdx >= 0 ? melodyStarts[composerPlayIdx] : -1;
+            const bassGroups = new Map();
+            composerBass.forEach(b => { if (!bassGroups.has(b.start)) bassGroups.set(b.start, []); bassGroups.get(b.start).push(b); });
+            bassGroups.forEach((group, start) => {
+              const heads = group.map(b => ({ y: bassY(b.name), sharp: b.name.includes('#'), d: diatonic(b.name) }));
+              const lowest = Math.min(...heads.map(h => h.d));
+              const ledgers = [];
+              if (lowest <= 16) ledgers.push(BB + SL);
+              if (lowest <= 14) ledgers.push(BB + SL * 2);
+              const average = heads.reduce((s, h) => s + h.d, 0) / heads.length;
+              const longest = Math.max(...group.map(b => b.dur));
+              const sounding = playBeat >= start - 1e-6 && playBeat < start + longest - 1e-6;
+              noteEls.push(noteGlyph({
+                key: `bass-${start}`, x: beatToX(start), heads, dur: Math.min(...group.map(b => b.dur)),
+                clr: sounding ? '#d4b06a' : 'rgba(232,223,208,0.8)', stemDown: average >= 22, ledgers, halo: false, cursor: 'default',
+              }));
+            });
+
+            const totalBeats = Math.max(cum, composerBass.reduce((m, b) => Math.max(m, b.start + b.dur), 0));
+            // Every measure gets a barline. Where a note runs across it there is no extra gap, so draw it just before that beat.
+            for (let m = beatsPerMeasure; m < totalBeats - 1e-6; m += beatsPerMeasure) {
+              if (barBeats.some(bb => Math.abs(bb - m) < 0.01)) continue;
+              const bx = beatToX(m) - 10;
+              noteEls.push(<line key={`bm-${m}`} x1={bx} y1={TT} x2={bx} y2={BB} stroke="rgba(255,255,255,0.3)" strokeWidth="1.3"/>);
+            }
+            const svgW = Math.max(560, beatToX(totalBeats) + 80);
+            const midY = (TT + BB) / 2;
+            const isEmpty = composerNotes.length === 0 && composerBass.length === 0;
 
             return (
               <div className="flex-shrink-0" style={{ background:'#0d0a07', borderBottom:'1px solid rgba(255,255,255,.08)' }}>
                 {/* SVG rolável horizontalmente com altura fixa */}
-                <div ref={composerRailRef} style={{ overflowX:'auto', height: STAFF_SVG_H + 16, scrollbarWidth:'thin', scrollbarColor:'rgba(255,255,255,.1) transparent' }}>
-                  {composerNotes.length === 0 ? (
-                    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', width:'100%', height: STAFF_SVG_H + 16, color:'#3a2e22', userSelect:'none' }}>
+                <div ref={composerRailRef} style={{ overflowX:'auto', height: SVG_H + 10, scrollbarWidth:'thin', scrollbarColor:'rgba(255,255,255,.1) transparent' }}>
+                  {isEmpty ? (
+                    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', width:'100%', height: SVG_H + 10, color:'#3a2e22', userSelect:'none' }}>
                       <Music size={36} style={{ opacity:.25, marginBottom:8 }}/>
                       <p style={{ fontSize:13 }}>Toque as teclas para adicionar notas</p>
                     </div>
                   ) : (
-                    <svg width={svgW} height={STAFF_SVG_H+8} style={{ display:'block' }}>
-                      {lineYs.map((y, idx) => (
-                        <line key={idx} x1={42} y1={y} x2={svgW-14} y2={y} stroke="rgba(255,255,255,0.2)" strokeWidth="1"/>
+                    <svg width={svgW} height={SVG_H} style={{ display:'block' }}>
+                      {/* Two five-line staves joined by a brace and a system line */}
+                      {[TT, BT].map(top => [0, 1, 2, 3, 4].map(n => (
+                        <line key={`${top}-${n}`} x1={STAFF_X} y1={top + SL * n} x2={svgW - 14} y2={top + SL * n} stroke="rgba(255,255,255,0.2)" strokeWidth="1"/>
+                      )))}
+                      <line x1={STAFF_X} y1={TT} x2={STAFF_X} y2={BB} stroke="rgba(255,255,255,0.35)" strokeWidth="1.5"/>
+                      <path d={`M${STAFF_X - 6},${TT} C${STAFF_X - 16},${TT + 14} ${STAFF_X - 4},${midY - 14} ${STAFF_X - 14},${midY} C${STAFF_X - 4},${midY + 14} ${STAFF_X - 16},${BB - 14} ${STAFF_X - 6},${BB}`}
+                        stroke="rgba(212,176,106,0.6)" strokeWidth="2.4" fill="none" strokeLinecap="round"/>
+                      <line x1={svgW - 14} y1={TT} x2={svgW - 14} y2={BB} stroke="rgba(255,255,255,0.25)" strokeWidth="1.5"/>
+                      <line x1={svgW - 11} y1={TT} x2={svgW - 11} y2={BB} stroke="rgba(255,255,255,0.5)"  strokeWidth="3"/>
+                      {/* Clefs: G on the treble, F on the bass */}
+                      <text x={STAFF_X + 2} y={TB + 6 * k} fill="rgba(212,176,106,0.85)" fontSize={SL * 5.8} fontFamily="serif" style={{ userSelect:'none', pointerEvents:'none' }}>𝄞</text>
+                      <text x={STAFF_X + 4} y={BT + SL * 3.05} fill="rgba(212,176,106,0.85)" fontSize={SL * 3.9} fontFamily="serif" style={{ userSelect:'none', pointerEvents:'none' }}>𝄢</text>
+                      {[TT, BT].map(top => (
+                        <g key={`ts-${top}`} style={{ userSelect:'none', pointerEvents:'none' }}>
+                          <text x={STAFF_X + 50} y={top + SL * 1.5 + 6 * k} fill="rgba(212,176,106,0.7)" fontSize={SL * 2} fontFamily="serif" fontWeight="bold" textAnchor="middle">{sigNum}</text>
+                          <text x={STAFF_X + 50} y={top + SL * 3.5 + 6 * k} fill="rgba(212,176,106,0.7)" fontSize={SL * 2} fontFamily="serif" fontWeight="bold" textAnchor="middle">{sigDen}</text>
+                        </g>
                       ))}
-                      <line x1={svgW-14} y1={ST} x2={svgW-14} y2={ST+SL*4} stroke="rgba(255,255,255,0.25)" strokeWidth="1.5"/>
-                      <line x1={svgW-11} y1={ST} x2={svgW-11} y2={ST+SL*4} stroke="rgba(255,255,255,0.5)"  strokeWidth="3"/>
-                      <text x="2" y={ST+SL*4+6} fill="rgba(212,176,106,0.8)" fontSize={SL*5.8} fontFamily="serif" style={{ userSelect:'none', pointerEvents:'none' }}>𝄞</text>
-                      <text x="49" y={ST+SL*1.5+6} fill="rgba(212,176,106,0.65)" fontSize={SL*2} fontFamily="serif" fontWeight="bold" textAnchor="middle" style={{ userSelect:'none', pointerEvents:'none' }}>{sigNum}</text>
-                      <text x="49" y={ST+SL*3.5+6} fill="rgba(212,176,106,0.65)" fontSize={SL*2} fontFamily="serif" fontWeight="bold" textAnchor="middle" style={{ userSelect:'none', pointerEvents:'none' }}>{sigDen}</text>
                       {noteEls}
                     </svg>
                   )}
@@ -3047,7 +3143,7 @@ export default function PianoMidi() {
               onChange={e => setSaveSongName(e.target.value)}
               onKeyDown={e => {
                 if (e.key === 'Enter' && saveSongName.trim()) {
-                  const newSong = { id:`custom-${Date.now()}`, title:saveSongName.trim(), artist: mpInRoom ? (mpName||'Sala') : 'Modo Livre', difficulty:1, bpm:composerBpmRef.current, timeSignature:composerTimeSigRef.current, notes:composerNotesRef.current.map(n=>[n.name,n.dur]), isCustom:true };
+                  const newSong = { id:`custom-${Date.now()}`, title:saveSongName.trim(), artist: mpInRoom ? (mpName||'Sala') : 'Modo Livre', difficulty:1, bpm:composerBpmRef.current, timeSignature:composerTimeSigRef.current, notes:composerNotesRef.current.map(n=>[n.name,n.dur]), ...(composerBassRef.current.length ? { bass: composerBassRef.current.map(b=>[b.name,b.start,b.dur]) } : {}), isCustom:true };
                   const upd = [...customSongs, newSong];
                   setCustomSongs(upd); try { localStorage.setItem('allegretto-custom-songs', JSON.stringify(upd)); } catch(e2) {}
                   setComposerSaved(true); setShowSaveDialog(false); setSaveSongName('');
@@ -3064,7 +3160,7 @@ export default function PianoMidi() {
               <button
                 onClick={() => {
                   if (!saveSongName.trim()) return;
-                  const newSong = { id:`custom-${Date.now()}`, title:saveSongName.trim(), artist: mpInRoom ? (mpName||'Sala') : 'Modo Livre', difficulty:1, bpm:composerBpmRef.current, timeSignature:composerTimeSigRef.current, notes:composerNotesRef.current.map(n=>[n.name,n.dur]), isCustom:true };
+                  const newSong = { id:`custom-${Date.now()}`, title:saveSongName.trim(), artist: mpInRoom ? (mpName||'Sala') : 'Modo Livre', difficulty:1, bpm:composerBpmRef.current, timeSignature:composerTimeSigRef.current, notes:composerNotesRef.current.map(n=>[n.name,n.dur]), ...(composerBassRef.current.length ? { bass: composerBassRef.current.map(b=>[b.name,b.start,b.dur]) } : {}), isCustom:true };
                   const upd = [...customSongs, newSong];
                   setCustomSongs(upd); try { localStorage.setItem('allegretto-custom-songs', JSON.stringify(upd)); } catch(e2) {}
                   setComposerSaved(true); setShowSaveDialog(false); setSaveSongName('');

@@ -113,6 +113,55 @@ function extractMelody(notes, division) {
 
 const nearestDuration = beats => DURATIONS.reduce((best, d) => (Math.abs(d - beats) < Math.abs(best - beats) ? d : best));
 
+// Left hand: everything below middle C, shown on the bass staff and played as accompaniment.
+const BASS_CEILING = 60; // C4 belongs to the melody
+const BASS_FLOOR = 36;   // C2: lower notes are folded up an octave so they stay readable on the bass staff
+const quarterBeat = beats => Math.round(beats * 4) / 4;
+
+/**
+ * Maps MIDI ticks onto the song's own beat timeline. Melody rhythms were rounded, so the original
+ * tick → beat ratio drifts; anchoring on each melody onset keeps the two hands together.
+ */
+function makeTickToBeat(melody, songNotes, division) {
+  const anchors = [];
+  let beat = 0;
+  melody.forEach((note, i) => { anchors.push([note.start, beat]); beat += songNotes[i][1]; });
+  const lastNote = melody[melody.length - 1];
+  anchors.push([Math.max(lastNote.end, lastNote.start + 1), beat]);
+  return tick => {
+    if (tick <= anchors[0][0]) return (tick - anchors[0][0]) / division;
+    for (let i = 1; i < anchors.length; i += 1) {
+      const [t1, b1] = anchors[i];
+      if (tick <= t1) {
+        const [t0, b0] = anchors[i - 1];
+        return b0 + ((tick - t0) / (t1 - t0)) * (b1 - b0);
+      }
+    }
+    const [tLast, bLast] = anchors[anchors.length - 1];
+    return bLast + (tick - tLast) / division;
+  };
+}
+
+function extractBass(notes, melody, songNotes, division) {
+  const inMelody = new Set(melody);
+  const toBeat = makeTickToBeat(melody, songNotes, division);
+  const bass = [];
+  for (const note of notes) {
+    if (inMelody.has(note) || note.channel === DRUM_CHANNEL || note.pitch >= BASS_CEILING) continue;
+    const start = quarterBeat(toBeat(note.start));
+    if (start < 0) continue; // before the melody starts: nothing to line it up with
+    const dur = Math.min(4, Math.max(0.25, quarterBeat(toBeat(note.end) - toBeat(note.start))));
+    let pitch = note.pitch;
+    while (pitch < BASS_FLOOR) pitch += 12;
+    bass.push([midiToName(pitch), start, dur]);
+  }
+  // One entry per pitch per moment: doubled notes in the arrangement would just stack on the staff.
+  const seen = new Set();
+  return bass
+    .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))
+    .filter(([name, start]) => { const key = `${name}@${start}`; if (seen.has(key)) return false; seen.add(key); return true; });
+}
+
 /** Octave shift that keeps the most notes on the keyboard; anything left over is folded in by octaves. */
 function fitToKeyboard(pitches) {
   let shift = 0;
@@ -147,6 +196,7 @@ export function midiToSong(buffer, fileName = 'musica.mid') {
     return [midiToName(fold(note.pitch)), nearestDuration(Math.min(beats, 4))];
   });
 
+  const bass = extractBass(notes, melody, songNotes, division);
   const bpm = Math.min(220, Math.max(30, Math.round(60000000 / tempo)));
   const totalBeats = songNotes.reduce((sum, [, d]) => sum + d, 0);
   const notesPerSecond = songNotes.length / (totalBeats * 60 / bpm);
@@ -160,8 +210,10 @@ export function midiToSong(buffer, fileName = 'musica.mid') {
       bpm,
       timeSignature: `${timeSignature[0]}/${timeSignature[1]}`,
       notes: songNotes,
+      // Left hand as [name, startBeat, durationBeats]; may overlap (chords), unlike the melody.
+      bass,
       source: 'midi',
     },
-    report: { sourceNotes: notes.length, melodyNotes: songNotes.length, octaveShift: shift / 12, folded, seconds: Math.round(totalBeats * 60 / bpm) },
+    report: { sourceNotes: notes.length, melodyNotes: songNotes.length, bassNotes: bass.length, octaveShift: shift / 12, folded, seconds: Math.round(totalBeats * 60 / bpm) },
   };
 }
