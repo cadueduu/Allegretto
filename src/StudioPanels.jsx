@@ -19,7 +19,7 @@ function DifficultyMarks({ level }) {
   );
 }
 
-export function StudioHeader({ midiInfo, audioReady, onAudio, onPlay, onLibrary, onModes, onRoom, inRoom, roomCode, memberCount }) {
+export function StudioHeader({ midiInfo, audioReady, onAudio, onPlay, onLibrary, onModes, onKids, onRoom, inRoom, roomCode, memberCount }) {
   return (
     <header className="studio-header">
       <div className="studio-header__inner">
@@ -32,6 +32,7 @@ export function StudioHeader({ midiInfo, audioReady, onAudio, onPlay, onLibrary,
           <button onClick={onPlay}>Tocar</button>
           <button onClick={onLibrary}>Repertório</button>
           <button onClick={onModes}>Modos</button>
+          <button onClick={onKids}>Infantil</button>
           <button onClick={onRoom}>Ao vivo</button>
         </nav>
 
@@ -74,7 +75,7 @@ export function StudioHero({ songs, songCount, currentSongId, onSelect, onPlay, 
         </div>
         <ul className="hero-facts" aria-label="Destaques">
           <li><strong>{songCount}</strong> peças</li>
-          <li><strong>4</strong> modos</li>
+          <li><strong>5</strong> modos</li>
           <li><strong>6</strong> timbres</li>
           <li className="hero-facts__note"><Headphones size={14} /> Melhor de fone</li>
         </ul>
@@ -209,6 +210,36 @@ export function ModesSection({ onLibrary, onFreeMode }) {
             <span className="input-card__icon"><input.icon size={16} /></span>
             <div><h3>{input.title}</h3><p>{input.desc}</p></div>
           </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// Colors and pictures of the Modo Infantil keys (NOTE_INFO in KidsMode.jsx), Dó to Dó.
+const KIDS_KEYS = [
+  ['Dó', '🍬', '#ff5d5d'], ['Ré', '👑', '#ff9a3c'], ['Mi', '🐱', '#ffc928'], ['Fá', '🧚', '#43c96b'],
+  ['Sol', '☀️', '#22b8d6'], ['Lá', '🧶', '#5b7cfa'], ['Si', '🔔', '#b065f0'], ['Dó', '🍬', '#ff5d5d'],
+];
+
+/** Invitation to the kids' room: the one colorful corner of the concert hall. */
+export function KidsInvite({ onOpen }) {
+  return (
+    <section className="kids-invite" aria-labelledby="kids-invite-title">
+      <div className="kids-invite__copy">
+        <p className="eyebrow">Para os pequenos</p>
+        <h2 id="kids-invite-title">Modo <em>Infantil</em></h2>
+        <p>
+          Teclas grandes e coloridas, cada nota com seu bichinho e uma voz que diz o nome dela.
+          Brincadeiras para conhecer as notas, um jogo de achar a tecla e músicas para tocar seguindo as cores, sem pressa.
+        </p>
+        <button className="primary-button" onClick={onOpen}>Abrir o Modo Infantil <ArrowUpRight size={16} /></button>
+      </div>
+      <div className="kids-invite__art" aria-hidden="true">
+        {KIDS_KEYS.map(([name, emoji, color], index) => (
+          <span key={index} className="kids-invite__key" style={{ '--c': color, '--i': index }}>
+            <i>{emoji}</i><b>{name}</b>
+          </span>
         ))}
       </div>
     </section>

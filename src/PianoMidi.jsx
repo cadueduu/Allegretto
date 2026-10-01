@@ -6,7 +6,8 @@ import { createAudioEngine } from './audioEngine.js';
 import AudioVisualizer from './AudioVisualizer.jsx';
 import FreeModeStage, { FREE_LOOKS, FREE_PALETTES, FreeModeReflection, NowPlaying, noteColor } from './FreeModeStage.jsx';
 import GrandKeyboard, { GrandCase } from './GrandKeyboard.jsx';
-import { InstrumentDeck, KeyboardToolbar, FreeSongPicker, LiveBand, MidiImportDialog, ModesSection, StudioFooter, StudioHeader, StudioHero } from './StudioPanels.jsx';
+import KidsMode from './KidsMode.jsx';
+import { InstrumentDeck, KeyboardToolbar, FreeSongPicker, KidsInvite, LiveBand, MidiImportDialog, ModesSection, StudioFooter, StudioHeader, StudioHero } from './StudioPanels.jsx';
 import { MidiImportError, midiToSong } from './midiImport.js';
 
 // ============================================================================
@@ -48,6 +49,23 @@ function getNoteStaffY(name) {
   const s = NOTE_STAFF_STEPS[name] ?? 6;
   return STAFF_TOP + (10 - s) * (STAFF_LINE_SPACING / 2);
 }
+
+// x on the Free Mode grand staff for any beat, interpolated between the notes' own positions so the
+// playhead glides across barline gaps and lands exactly on each note head.
+function scoreBeatToX({ anchors, minX, px }, beat) {
+  if (!anchors.length) return minX;
+  const [firstBeat, firstX] = anchors[0];
+  if (beat <= firstBeat) return Math.max(minX, firstX + (beat - firstBeat) * px);
+  for (let i = 1; i < anchors.length; i += 1) {
+    const [b1, x1] = anchors[i];
+    if (beat <= b1) {
+      const [b0, x0] = anchors[i - 1];
+      return x0 + ((beat - b0) / (b1 - b0)) * (x1 - x0);
+    }
+  }
+  return anchors[anchors.length - 1][1];
+}
+const RESULT_COLORS = { perfect: '#9bd17e', good: '#f0d060', miss: '#e07c5e' };
 
 // ============================================================================
 // INSTRUMENTS
@@ -592,6 +610,7 @@ export default function PianoMidi() {
   const [mpLoading, setMpLoading] = useState(false);
   const [remoteNoteDisplay, setRemoteNoteDisplay] = useState(new Map()); // noteName → [{peerId,color}]
   const [freeMode,       setFreeMode]       = useState(false);
+  const [kidsMode,       setKidsMode]       = useState(false);
   const [keyClickCounts, setKeyClickCounts] = useState(() => new Map());
   const [composerMode,   setComposerMode]   = useState(false);
   const [composerNotes,  setComposerNotes]  = useState([]); // [{id,name,dur}]
@@ -599,7 +618,7 @@ export default function PianoMidi() {
   const [composerTimeSig,setComposerTimeSig]= useState('4/4');
   const [composerSelDur, setComposerSelDur] = useState(1);
   const [composerPlaying,setComposerPlaying]= useState(false);
-  const [composerPlayIdx,setComposerPlayIdx]= useState(-1);
+  const [composerPlayBeat,setComposerPlayBeat]= useState(-1); // beat of the latest onset while "Ouvir" plays
   const [composerBass,   setComposerBass]   = useState([]); // left hand [{ name, start, dur }] for songs that have one
   const [composerSaved,  setComposerSaved]  = useState(false);
   // Follow mode (partitura livre — notas caindo)
@@ -611,6 +630,8 @@ export default function PianoMidi() {
   const [followMaxCombo, setFollowMaxCombo] = useState(0);
   const [followHits,     setFollowHits]     = useState({ perfect:0, good:0, miss:0 });
   const [followFeedback, setFollowFeedback] = useState(null);
+  const [followBeat,     setFollowBeat]     = useState(-1);
+  const [followResults,  setFollowResults]  = useState({}); // melody index → 'perfect' | 'good' | 'miss'
   // Custom songs (criadas no compositor e salvas no menu)
   const [customSongs,    setCustomSongs]    = useState(() => { try { return JSON.parse(localStorage.getItem('allegretto-custom-songs') || '[]'); } catch(e) { return []; } });
   const [showSaveDialog, setShowSaveDialog] = useState(false);
@@ -655,6 +676,8 @@ export default function PianoMidi() {
   const remoteNotesRef   = useRef(new Map()); // noteName → [{peerId, color}]
   const broadcastNoteRef = useRef(null);       // always-fresh broadcast fn
   const freeModeRef           = useRef(false);
+  const kidsModeRef           = useRef(false);
+  const kidsPressRef          = useRef(null); // the Modo Infantil activity listening to key presses
   const freeModePlayRef       = useRef(null);
   const freeFloatIdRef        = useRef(0);
   const risingBarsRef         = useRef([]);
@@ -685,7 +708,12 @@ export default function PianoMidi() {
   const composerBpmRef     = useRef(90);
   const composerTimeSigRef = useRef('4/4');
   const composerBassRef    = useRef([]);
-  const composerNoteXRef   = useRef([]); // x of each melody note on the staff, for auto-scroll
+  // Playhead on the grand staff: [beat, x] anchors from the last render, and the clock it runs on.
+  const scoreAnchorsRef    = useRef(null);
+  const scoreClockRef      = useRef(null); // { t0, beatMs } — beat 0 happens at performance.now() === t0
+  const playheadRef        = useRef(null);
+  const beatFlashRef       = useRef(null);
+  const followResultsRef   = useRef({});
   const composerTimersRef     = useRef([]);
   const composerRailRef       = useRef(null);
 
@@ -794,6 +822,8 @@ export default function PianoMidi() {
     setActiveNotes(prev => { const s = new Set(prev); s.add(noteName); return s; });
     broadcastNoteRef.current?.(noteName, 'on');
     freeModePlayRef.current?.(noteName);
+    // The kids' room covers the page: its games get the note, the lesson and training behind it don't.
+    if (kidsModeRef.current) { kidsPressRef.current?.(noteName); return; }
 
     // Training mode: check if this press scores a hit
     if (trainingStateRef.current === 'playing') {
@@ -892,6 +922,8 @@ export default function PianoMidi() {
         followActiveRef.current = followActiveRef.current.map(n =>
           n.id === best.id ? { ...n, hit: hitType, hitTime: now } : n
         );
+        followResultsRef.current = { ...followResultsRef.current, [best.idx]: hitType };
+        setFollowResults(followResultsRef.current);
         followComboRef.current    = newCombo;
         if (newCombo > followMaxComboRef.current) followMaxComboRef.current = newCombo;
         followScoreRef.current   += gain;
@@ -937,6 +969,7 @@ export default function PianoMidi() {
 
   useEffect(() => { releaseNoteRef.current = releaseNote; }, [releaseNote]);
   useEffect(() => { freeModeRef.current    = freeMode; },    [freeMode]);
+  useEffect(() => { kidsModeRef.current    = kidsMode; },    [kidsMode]);
   useEffect(() => { composerModeRef.current  = composerMode; }, [composerMode]);
   useEffect(() => { composerSavedRef.current   = composerSaved;   }, [composerSaved]);
   useEffect(() => { followStateRef.current     = followState;     }, [followState]);
@@ -948,13 +981,43 @@ export default function PianoMidi() {
   // (An effect rather than requestAnimationFrame, which never fires while the tab is hidden.)
   const [songLoadSeq, setSongLoadSeq] = useState(0);
   useEffect(() => { if (composerRailRef.current) composerRailRef.current.scrollLeft = 0; }, [songLoadSeq]);
-  // Keep the note being played in view while "Ouvir" runs.
+  // Playhead: while "Ouvir" or "Acompanhar" runs, a gold line sweeps both staves in time and the rail
+  // scrolls with it. Driven from a frame loop on refs, so the score itself doesn't re-render 60×/s.
+  const scoreActive = composerPlaying || followState === 'countdown' || followState === 'playing';
   useEffect(() => {
-    if (composerPlayIdx < 0) return;
-    const rail = composerRailRef.current;
-    const x = composerNoteXRef.current[composerPlayIdx];
-    if (rail && x != null) rail.scrollTo({ left: Math.max(0, x - rail.clientWidth * 0.3), behavior: 'smooth' });
-  }, [composerPlayIdx]);
+    if (!scoreActive) return undefined;
+    let frame;
+    const tick = () => {
+      frame = requestAnimationFrame(tick);
+      const clock = scoreClockRef.current;
+      const score = scoreAnchorsRef.current;
+      if (!clock || !score) return;
+      const beat = (performance.now() - clock.t0) / clock.beatMs;
+      const x = scoreBeatToX(score, beat);
+      // Beat pulse, strongest on each measure's downbeat: a visual metronome to play in time with.
+      const whole = Math.floor(beat);
+      const pulse = beat < 0 ? 0 : (1 - (beat - whole)) ** 2;
+      const measures = whole / score.beatsPerMeasure;
+      const downbeat = Math.abs(measures - Math.round(measures)) < 1e-6;
+      const head = playheadRef.current;
+      if (head) {
+        head.setAttribute('transform', `translate(${x.toFixed(1)} 0)`);
+        head.setAttribute('opacity', '1');
+        const bead = head.lastChild;
+        bead?.setAttribute('r', (3.5 + (downbeat ? 3 : 1.4) * pulse).toFixed(2));
+        bead?.setAttribute('opacity', (0.4 + 0.6 * pulse).toFixed(2));
+      }
+      const flash = beatFlashRef.current;
+      if (flash) flash.style.opacity = (pulse * (downbeat ? 1 : 0.5)).toFixed(2);
+      const rail = composerRailRef.current;
+      if (rail) {
+        const target = Math.max(0, x - rail.clientWidth * 0.35);
+        if (Math.abs(rail.scrollLeft - target) > 0.5) rail.scrollLeft = target;
+      }
+    };
+    tick();
+    return () => cancelAnimationFrame(frame);
+  }, [scoreActive]);
   useEffect(() => {
     freeModePlayRef.current = (noteName) => {
       if (!freeModeRef.current) return;
@@ -1061,7 +1124,8 @@ export default function PianoMidi() {
     composerTimersRef.current = [];
     try { synthRef.current?.releaseAll(); } catch(e) {}
     setComposerPlaying(false);
-    setComposerPlayIdx(-1);
+    setComposerPlayBeat(-1);
+    scoreClockRef.current = null;
     // Playback may stop mid-note: unlight its keys and let its bars float away.
     setActiveNotes(new Set());
     const now = performance.now();
@@ -1077,11 +1141,13 @@ export default function PianoMidi() {
     setComposerPlaying(true);
     const beatMs = 60000 / bpm;
     const later = (fn, ms) => composerTimersRef.current.push(setTimeout(fn, ms));
+    scoreClockRef.current = { t0: performance.now(), beatMs };
     let t = 0;
-    notes.forEach((note, i) => {
+    notes.forEach((note) => {
       const durMs = note.dur * beatMs * 0.88;
+      const beat = t / beatMs;
       later(() => {
-        setComposerPlayIdx(i);
+        setComposerPlayBeat(beat);
         if (note.name === 'rest') return;
         try { synthRef.current?.triggerAttack(note.name); } catch(e) {}
         // Light the key and send a bar up the stage, so the eye follows what the ear hears.
@@ -1095,12 +1161,13 @@ export default function PianoMidi() {
       }, t);
       t += note.dur * beatMs;
     });
-    // Left hand, a little softer so the melody stays on top.
+    // Left hand, a little softer so the melody stays on top; its onsets light its notes on the bass staff.
     bass.forEach(b => later(() => {
       try { synthRef.current?.triggerAttackRelease(b.name, (b.dur * beatMs * 0.95) / 1000, undefined, 0.5); } catch(e) {}
+      setComposerPlayBeat(b.start);
     }, b.start * beatMs));
     const end = Math.max(t, ...bass.map(b => (b.start + b.dur) * beatMs));
-    later(() => { setComposerPlaying(false); setComposerPlayIdx(-1); }, end);
+    later(() => { setComposerPlaying(false); setComposerPlayBeat(-1); scoreClockRef.current = null; }, end);
   }, [ensureAudio]);
 
   const addComposerNote = useCallback((noteName, dur) => {
@@ -1541,6 +1608,7 @@ export default function PianoMidi() {
       followPendingRef.current = stillPending;
 
       let missCount = 0;
+      const missed = {};
       const updated = [...followActiveRef.current, ...toSpawn].map(note => {
         if (note.hit) {
           if (now - note.hitTime > 380) return null;
@@ -1549,6 +1617,7 @@ export default function PianoMidi() {
         const y = ((elapsed - note.spawnTime) / fallDur) * 100;
         if (y >= MISS_Y) {
           missCount++;
+          missed[note.idx] = 'miss';
           followHitsRef.current.miss++;
           followComboRef.current = 0;
           return { ...note, y: MISS_Y, hit: 'miss', hitTime: now };
@@ -1558,6 +1627,11 @@ export default function PianoMidi() {
 
       followActiveRef.current = updated;
       setFollowDispNotes([...updated]);
+      setFollowBeat(elapsed / followBeatDurRef.current);
+      if (missCount > 0) {
+        followResultsRef.current = { ...followResultsRef.current, ...missed };
+        setFollowResults(followResultsRef.current);
+      }
 
       if (missCount > 0) {
         setFollowCombo(0);
@@ -1574,6 +1648,8 @@ export default function PianoMidi() {
       if (done) {
         followStateRef.current = 'complete';
         setFollowState('complete');
+        setFollowBeat(-1);
+        scoreClockRef.current = null;
         return;
       }
 
@@ -1762,9 +1838,14 @@ export default function PianoMidi() {
     setFollowHits({ perfect:0, good:0, miss:0 });
     setFollowDispNotes([]); setFollowFeedback(null);
     followActiveRef.current = [];
+    followResultsRef.current = {};
+    setFollowResults({});
+    setFollowBeat(-1);
 
     const COUNTDOWN_MS = 3000;
     followStartRef.current = performance.now() + COUNTDOWN_MS;
+    // The staff's playhead runs on the same clock as the falling notes (negative beats during the count-in).
+    scoreClockRef.current = { t0: followStartRef.current, beatMs: beatDur };
 
     let cumMs = 0;
     followTotalMsRef.current = notes.reduce((s, n) => s + n.dur * beatDur, 0);
@@ -1778,6 +1859,7 @@ export default function PianoMidi() {
       const heightPct = Math.max(4, Math.min(18, (note.dur / FALL_BEATS) * 100));
       followPendingRef.current.push({
         id: `f${i}-${Date.now()}`,
+        idx: i,
         noteName: note.name,
         dur: note.dur,
         targetTime,
@@ -1816,6 +1898,10 @@ export default function PianoMidi() {
     setFollowState('idle');
     setFollowDispNotes([]);
     setFollowCdown(null);
+    setFollowBeat(-1);
+    scoreClockRef.current = null;
+    followResultsRef.current = {};
+    setFollowResults({});
     followActiveRef.current = [];
     followPendingRef.current = [];
     try { synthRef.current?.releaseAll(); } catch(e) {}
@@ -1935,6 +2021,39 @@ export default function PianoMidi() {
   };
   // Both follow a click, so they also unlock audio before the first note.
   const goToPiano = () => { ensureAudio(); document.getElementById('piano')?.scrollIntoView(); };
+  const openKids = () => {
+    ensureAudio();
+    stopComposer(); stopFollow(); stopDemo();
+    setFreeMode(false); risingBarsRef.current = [];
+    setKidsMode(true);
+  };
+  // Little reward sounds for the kids' games, on the current instrument.
+  const playJingle = useCallback((kind) => {
+    const synth = synthRef.current;
+    if (!synth || Tone.context.state !== 'running') return;
+    const now = Tone.now() + 0.04;
+    const steps = kind === 'fanfare'
+      ? [['C5', 0, 0.12], ['E5', 0.11, 0.12], ['G5', 0.22, 0.12], ['C6', 0.33, 0.8]]
+      : [['G5', 0, 0.1], ['C6', 0.09, 0.3]];
+    steps.forEach(([note, at, dur]) => { try { synth.triggerAttackRelease(note, dur, now + at, 0.42); } catch(e) {} });
+  }, []);
+  // Sound-only playback for the kids' lessons (ear training, rhythm): no keys light up, so nothing gives the answer away.
+  // Resolves with when the first note will actually be heard (lead) and when the last one ends, both in ms from now.
+  const playKidsSound = useCallback(async (seq, bpm = 100) => {
+    if (!(await ensureAudio())) return { lead: 0, duration: 0 };
+    const synth = synthRef.current;
+    const beat = 60 / bpm;
+    const start = Tone.now() + 0.05;
+    let t = start;
+    seq.forEach(([note, beats, velocity = 0.72]) => {
+      if (note !== 'rest' && synth) { try { synth.triggerAttackRelease(note, Math.max(0.08, beats * beat * 0.9), t, velocity); } catch(e) {} }
+      t += beats * beat;
+    });
+    const raw = Tone.getContext().rawContext;
+    const latency = (raw.outputLatency || raw.baseLatency || 0) * 1000;
+    const ahead = (start - raw.currentTime) * 1000;
+    return { lead: ahead + latency, duration: ahead + latency + (t - start) * 1000 };
+  }, [ensureAudio]);
   const pickSong = (song) => {
     selectSong(song);
     ensureAudio();
@@ -2092,6 +2211,7 @@ export default function PianoMidi() {
         onPlay={goToPiano}
         onLibrary={() => setShowSongList(true)}
         onModes={() => document.getElementById('modos')?.scrollIntoView()}
+        onKids={openKids}
         onRoom={() => setMpOpen(true)}
         inRoom={mpInRoom}
         roomCode={mpCode}
@@ -2588,6 +2708,7 @@ export default function PianoMidi() {
         )}
 
         <ModesSection onLibrary={() => setShowSongList(true)} onFreeMode={() => setFreeMode(true)}/>
+        <KidsInvite onOpen={openKids}/>
         <LiveBand onRoom={() => setMpOpen(true)} inRoom={mpInRoom} roomCode={mpCode}/>
         <StudioFooter songCount={SONGS.length}/>
       </main>
@@ -2860,6 +2981,9 @@ export default function PianoMidi() {
             const melodyStarts = [];
             const xs = [];
             const editable = !composerPlaying && !composerSaved;
+            // What is sounding now (Ouvir: the latest onset; Acompanhar: the falling-notes clock).
+            const nowBeat = composerPlaying ? composerPlayBeat : followState === 'playing' ? followBeat : -1;
+            const isNow = (start, dur) => nowBeat >= start - 1e-6 && nowBeat < start + dur - 1e-6;
             let cum = 0;
             let gapAcc = 0;
             const BARLINE_PAD = 20;
@@ -2867,8 +2991,10 @@ export default function PianoMidi() {
               const nx  = LEFT + cum * PX + gapAcc;
               xs[i] = nx;
               melodyStarts[i] = cum;
-              const isPlay = composerPlayIdx === i;
-              const clr = isPlay ? '#d4b06a' : '#e8dfd0';
+              const isPlay = isNow(cum, note.dur);
+              // While following, each note keeps the color of how it was played.
+              const result = followState !== 'idle' ? followResults[i] : null;
+              const clr = result ? RESULT_COLORS[result] : isPlay ? '#d4b06a' : '#e8dfd0';
               const dur = note.dur;
               const onClick = () => { if (editable) deleteComposerNote(note.id); };
               const cursor = editable ? 'pointer' : 'default';
@@ -2907,11 +3033,9 @@ export default function PianoMidi() {
                 gapAcc += BARLINE_PAD;
               }
             });
-            composerNoteXRef.current = xs;
             const beatToX = beat => LEFT + beat * PX + BARLINE_PAD * barBeats.filter(b => b <= beat + 1e-6).length;
 
             // ── Left hand (bass): chords grouped by start beat, one stem per chord ──
-            const playBeat = composerPlayIdx >= 0 ? melodyStarts[composerPlayIdx] : -1;
             const bassGroups = new Map();
             composerBass.forEach(b => { if (!bassGroups.has(b.start)) bassGroups.set(b.start, []); bassGroups.get(b.start).push(b); });
             bassGroups.forEach((group, start) => {
@@ -2922,7 +3046,7 @@ export default function PianoMidi() {
               if (lowest <= 14) ledgers.push(BB + SL * 2);
               const average = heads.reduce((s, h) => s + h.d, 0) / heads.length;
               const longest = Math.max(...group.map(b => b.dur));
-              const sounding = playBeat >= start - 1e-6 && playBeat < start + longest - 1e-6;
+              const sounding = isNow(start, longest);
               noteEls.push(noteGlyph({
                 key: `bass-${start}`, x: beatToX(start), heads, dur: Math.min(...group.map(b => b.dur)),
                 clr: sounding ? '#d4b06a' : 'rgba(232,223,208,0.8)', stemDown: average >= 22, ledgers, halo: false, cursor: 'default',
@@ -2943,6 +3067,11 @@ export default function PianoMidi() {
               const restX = (beatToX(m) + beatToX(Math.min(m + beatsPerMeasure, totalBeats))) / 2 - 10;
               noteEls.push(<rect key={`br-${m}`} x={restX - 6 * k} y={BT + SL} width={12 * k} height={SL * 0.45} fill="rgba(232,223,208,0.55)"/>);
             }
+            // Where each onset sits, for the playhead's frame loop.
+            const anchorX = new Map(melodyStarts.map((beat, i) => [beat, xs[i]]));
+            bassGroups.forEach((_, start) => { if (!anchorX.has(start)) anchorX.set(start, beatToX(start)); });
+            if (!anchorX.has(totalBeats)) anchorX.set(totalBeats, beatToX(totalBeats));
+            scoreAnchorsRef.current = { anchors: [...anchorX].sort((a, b) => a[0] - b[0]), beatsPerMeasure, px: PX, minX: STAFF_X + 66 };
             const svgW = Math.max(560, beatToX(totalBeats) + 80);
             const midY = (TT + BB) / 2;
             const isEmpty = composerNotes.length === 0 && composerBass.length === 0;
@@ -2977,6 +3106,14 @@ export default function PianoMidi() {
                         </g>
                       ))}
                       {noteEls}
+                      {scoreActive && (
+                        // Positioned by the frame loop; starts hidden so it never flashes at x = 0.
+                        <g ref={playheadRef} opacity="0" style={{ pointerEvents:'none' }}>
+                          <rect x={-6} y={TT - 14} width={12} height={BB - TT + 28} rx={6} fill="#d4b06a" opacity="0.1"/>
+                          <line x1={0} y1={TT - 12} x2={0} y2={BB + 12} stroke="#ecd49c" strokeWidth="2" strokeLinecap="round" opacity="0.9"/>
+                          <circle cx={0} cy={TT - 18} r={3.5} fill="#ecd49c"/>
+                        </g>
+                      )}
                     </svg>
                   )}
                 </div>
@@ -3043,6 +3180,8 @@ export default function PianoMidi() {
                 {/* Barra de hit zone */}
                 <div className="hz-bar" style={{ position:'absolute', bottom:0, left:0, right:0, height:3, background:'linear-gradient(90deg,transparent,#d4b06a 20%,#d4b06a 80%,transparent)', zIndex:10 }}/>
                 <div style={{ position:'absolute', bottom:0, left:0, right:0, height:40, background:'linear-gradient(to top,rgba(212,176,106,.07),transparent)', zIndex:9, pointerEvents:'none' }}/>
+                {/* Flashes on every beat (brightest on the first of the measure), in step with the staff's playhead */}
+                <div ref={beatFlashRef} aria-hidden="true" style={{ position:'absolute', bottom:0, left:0, right:0, height:5, background:'linear-gradient(90deg,transparent,#f3e0b0 12%,#f3e0b0 88%,transparent)', boxShadow:'0 0 22px 6px rgba(236,212,156,.45)', opacity:0, zIndex:11, pointerEvents:'none' }}/>
 
                 {/* Score + combo */}
                 {followState === 'playing' && <>
@@ -3130,6 +3269,22 @@ export default function PianoMidi() {
             </GrandCase>
           </div>
         </div>
+      )}
+
+      {/* ── MODO INFANTIL — sala própria, colorida, com teclas grandes ── */}
+      {kidsMode && (
+        <KidsMode
+          activeNotes={activeNotes}
+          pressHookRef={kidsPressRef}
+          pointerHandlers={name => ({ onPointerDown: handlePianoPointerDown(name), onPointerUp: handlePianoPointerEnd, onPointerCancel: handlePianoPointerEnd, onPointerLeave: handlePianoPointerEnd })}
+          onSound={playKidsSound}
+          onDemo={(notes, bpm) => playComposer(notes.map(([name, dur]) => ({ name, dur })), bpm)}
+          onStopDemo={stopComposer}
+          demoBeat={composerPlayBeat}
+          demoPlaying={composerPlaying}
+          onJingle={playJingle}
+          onClose={() => { stopComposer(); setKidsMode(false); }}
+        />
       )}
 
       {/* ── MODAL: SALVAR PARTITURA ── */}

@@ -200,6 +200,21 @@ html { scroll-behavior: smooth; }
 .live-keys i { flex: 1; background: linear-gradient(180deg, #fffdf8, #ece2cf); border-radius: 0 0 4px 4px; box-shadow: inset 0 8px 8px -6px rgba(0, 0, 0, .4); }
 .live-keys i.lit { background: linear-gradient(180deg, #fff 0%, var(--lit) 90%); box-shadow: 0 0 18px -2px var(--lit); }
 
+/* ---------- Kids invitation: the same frame as the live band, with the toy piano's colors ---------- */
+.kids-invite { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 48px; align-items: center; max-width: var(--page-width); margin: 72px auto 0; padding: 52px 56px; overflow: hidden; background: radial-gradient(36rem 20rem at 0% 100%, rgba(91, 124, 250, .1), transparent 60%), radial-gradient(30rem 18rem at 100% 0%, rgba(255, 201, 40, .08), transparent 60%), linear-gradient(180deg, #121010, #0a0909); border: 1px solid rgba(212, 176, 106, .26); border-radius: 2px; box-shadow: inset 0 0 0 7px #0b0a09, inset 0 0 0 8px rgba(212, 176, 106, .12); }
+.kids-invite .eyebrow { gap: 8px; }
+.kids-invite .eyebrow::before { display: none; }
+.kids-invite h2 { margin: 0 0 16px; color: var(--ink); font-family: var(--serif); font-size: clamp(34px, 4vw, 52px); font-weight: 400; line-height: 1.04; }
+.kids-invite h2 em { font-style: italic; background: linear-gradient(90deg, #ff5d5d, #ffc928 35%, #43c96b 55%, #22b8d6 75%, #b065f0); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.kids-invite p { max-width: 31rem; margin: 0 0 30px; color: var(--muted); font-size: 15px; line-height: 1.75; }
+.kids-invite__art { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 6px; height: 190px; padding: 12px 12px 14px; background: linear-gradient(180deg, #4656b8, #2d3a88); border-radius: 22px 22px 10px 10px; box-shadow: inset 0 2px 0 rgba(255, 255, 255, .18), 0 24px 50px -24px rgba(91, 124, 250, .55); }
+.kids-invite__key { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 5px; padding-bottom: 12px; color: #24325f; background: linear-gradient(180deg, #fff 70%, #eef1ff); border-radius: 6px 6px 14px 14px; box-shadow: 0 5px 0 #c9d1f2; animation: kidsInviteTap 4.8s ease-in-out infinite; animation-delay: calc(var(--i) * .6s); }
+.kids-invite__key i { display: grid; place-items: center; width: clamp(26px, 3vw, 36px); height: clamp(26px, 3vw, 36px); font-size: clamp(14px, 1.6vw, 19px); font-style: normal; background: color-mix(in srgb, var(--c) 24%, #fff); border: 3px solid var(--c); border-radius: 50%; }
+.kids-invite__key b { font-size: clamp(10px, 1.1vw, 13px); font-weight: 700; }
+/* One key at a time dips and glows in its color, like a child playing a scale. */
+@keyframes kidsInviteTap { 0%, 14%, 100% { transform: none; box-shadow: 0 5px 0 #c9d1f2; } 5% { transform: translateY(4px); box-shadow: 0 1px 0 #c9d1f2, 0 0 22px 2px var(--c); } }
+@media (prefers-reduced-motion: reduce) { .kids-invite__key { animation: none; } }
+
 /* ---------- Footer ---------- */
 .studio-footer { display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: var(--page-width); margin: 120px auto 0; padding: 40px 0 48px; border-top: 1px solid var(--gold-line); }
 .studio-footer__name { color: var(--ink); font-family: var(--serif); font-size: 24px; letter-spacing: .06em; }
@@ -217,6 +232,8 @@ html { scroll-behavior: smooth; }
   .studio-hero { grid-template-columns: minmax(0, 1fr); gap: 44px; padding: 48px 0 56px; }
   .live-band { grid-template-columns: minmax(0, 1fr); padding: 36px 26px; }
   .live-band__art { height: 180px; }
+  .kids-invite { grid-template-columns: minmax(0, 1fr); gap: 32px; padding: 36px 26px; }
+  .kids-invite__art { height: 150px; }
 }
 @media (max-width: 900px) {
   .header-nav { display: none; }
