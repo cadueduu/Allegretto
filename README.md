@@ -196,6 +196,15 @@ Lições curtas em sequência, no estilo dos aplicativos de idiomas, guiadas pel
 
 O que a criança erra volta no fim da lição. Ganha XP, estrelas e um foguinho de dias seguidos.
 
+### Voz da Nina
+
+As falas da Nina são gravações com jeito de criança, em `public/voice/`. Elas são geradas pela voz Maria do Windows e aceleradas, o que sobe o tom e o timbre juntos. Quando um texto do Modo Infantil mudar (`src/kids/texts.js`), grave de novo no Windows:
+
+```bash
+pip install numpy lameenc
+npm run voz-nina
+```
+
 ### Brincar
 
 * Descobrir as notas, achar a nota, músicas por cores

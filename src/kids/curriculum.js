@@ -1,6 +1,9 @@
 // The learning path of the Modo Infantil: units of short lessons, each a mix of tiny exercises.
 // Builders run when a lesson starts, so every replay shuffles notes and answers.
 import { KIDS_SONGS, noteMidi, pitchClass, staffStep } from './kidsShared.jsx';
+import { EAR, KEY_TIPS, LINES, RHYTHM_LEARN, STAFF_TIPS, TIPS } from './texts.js';
+
+export { KEY_TIPS, STAFF_TIPS };
 
 let uid = 0;
 const ex = (type, props) => ({ uid: ++uid, type, ...props });
@@ -25,63 +28,6 @@ const SPACE_NOTES = [F, A, C5, E5];
 const C_SCALE = [C, D, E, F, G, A, B, C5];
 const G_SCALE = [G, A, B, C5, D5, E5, 'F#5', G5];
 
-// Where each white key lives, told by the black keys around it — how pianists find notes without colors.
-export const KEY_TIPS = {
-  C: 'O Dó fica logo antes das duas teclas pretas.',
-  D: 'O Ré fica no meio das duas teclas pretas.',
-  E: 'O Mi fica logo depois das duas teclas pretas.',
-  F: 'O Fá fica logo antes das três teclas pretas.',
-  G: 'O Sol fica entre a primeira e a segunda das três pretas.',
-  A: 'O Lá fica entre a segunda e a terceira das três pretas.',
-  B: 'O Si fica logo depois das três teclas pretas.',
-};
-// Where each note lives on the treble staff. Lines from the bottom: Mi, Sol, Si, Ré, Fá; spaces: Fá, Lá, Dó, Mi.
-export const STAFF_TIPS = {
-  C4: 'O Dó fica numa linha pequenininha, embaixo da pauta.',
-  D4: 'O Ré fica pendurado logo embaixo da primeira linha.',
-  E4: 'O Mi mora na primeira linha, a de baixo.',
-  F4: 'O Fá mora no primeiro espaço, entre duas linhas.',
-  G4: 'O Sol mora na segunda linha, onde a clave de sol se enrola.',
-  A4: 'O Lá mora no segundo espaço.',
-  B4: 'O Si mora na linha do meio.',
-  C5: 'O Dó agudo mora no terceiro espaço.',
-  D5: 'O Ré agudo mora na quarta linha.',
-  E5: 'O Mi agudo mora no último espaço, lá em cima.',
-  F5: 'O Fá agudo mora na quinta linha, a mais alta.',
-  G5: 'O Sol agudo fica sentadinho em cima da pauta.',
-  'F#5': 'O Fá sustenido fica na linha do Fá agudo, com o ♯ na frente. É a tecla preta logo à direita do Fá.',
-};
-
-const TIPS = {
-  colors: { art: '🌈', title: 'Cada nota tem uma cor', text: 'Oi! Eu sou a Nina, a notinha. No nosso piano cada nota tem uma cor e um desenho. Vamos conhecer as três primeiras!' },
-  sevenNotes: { art: '🎹', title: 'Sete notas', text: 'A música toda é feita com sete notas: Dó, Ré, Mi, Fá, Sol, Lá e Si. Depois do Si, começa outro Dó!' },
-  twoBlack: { title: 'As duas teclas pretas', text: 'Agora sem cores, igual a um piano de verdade! As teclas pretas vêm em grupos de duas e de três. O Dó fica sempre logo antes das duas pretas.', keys: 'plain', highlight: [C, C5] },
-  threeBlack: { title: 'As três teclas pretas', text: 'O Fá fica sempre logo antes das três teclas pretas. Achou o grupo de três? O Fá está do lado esquerdo dele.', keys: 'plain', highlight: [F] },
-  highLow: { art: '🐻 🐦', title: 'Grave e agudo', text: 'Sons graves são grossos, como um urso. Sons agudos são fininhos, como um passarinho. Toque nos botões para ouvir.', sounds: [['🐻 Grave', [['C3', 1.5]]], ['🐦 Agudo', [['C6', 1.5]]]] },
-  upDown: { art: '⬆️ ⬇️', title: 'Subindo e descendo', text: 'No piano, quanto mais para a direita, mais agudo o som. Se as notas vão para a direita, a melodia sobe. Para a esquerda, ela desce.', sounds: [['⬆️ Sobe', [[C, 1], [E, 1], [G, 1]]], ['⬇️ Desce', [[G, 1], [E, 1], [C, 1]]]] },
-  sameDiff: { art: '👂', title: 'Igual ou diferente', text: 'Agora vou tocar duas notas. Escute bem: elas são iguaizinhas ou diferentes?', sounds: [['🟰 Iguais', [[E, 1], ['rest', 0.4], [E, 1]]], ['↔️ Diferentes', [[C, 1], ['rest', 0.4], [A, 1]]]] },
-  echo: { art: '🦜', title: 'Brincar de papagaio', text: 'Eu toco e as teclas acendem. Depois você toca igualzinho! Se errar, eu toco de novo para você.' },
-  beat: { art: '🥁', title: 'O tempo da música', text: 'Toda música tem um pulso, como o coração: tum, tum, tum. Cada batida é um tempo. Vamos bem devagarinho!' },
-  staff: { title: 'A pauta', text: 'A música se escreve numa pauta de cinco linhas. Cada nota tem sua casinha: numa linha ou num espaço. Quanto mais alta na pauta, mais agudo o som.', staff: [C, E, G, C5] },
-  dictation: { title: 'Ditado da pauta', text: 'Agora é ao contrário: eu falo o nome da nota e você acha onde ela mora na pauta.', staff: [D, F, A] },
-  lines: { title: 'Notas na linha', text: 'Quando a linha passa bem no meio da bolinha, como um espetinho, a nota está numa linha.', staff: [E, G, B], labels: true },
-  spaces: { title: 'Notas no espaço', text: 'Quando a bolinha fica entre duas linhas, sem nenhuma linha passando por ela, a nota está num espaço.', staff: [F, A, C5], labels: true },
-  lineNotes: { title: 'As notas das linhas', text: 'As três primeiras linhas, de baixo para cima, são: Mi, Sol e Si. Uma linha sim, uma linha não!', staff: [E, G, B], labels: true },
-  spaceNotes: { title: 'As notas dos espaços', text: 'Os três primeiros espaços, de baixo para cima, são: Fá, Lá e Dó.', staff: [F, A, C5], labels: true },
-  higher: { title: 'Mais alto, mais agudo', text: 'Na pauta, quanto mais para cima a nota está, mais agudo é o som. Mais para baixo, mais grave.', staff: [C, G, C5, E], sounds: [['🔊 Ouvir', [[C, 1], [G, 1], [C5, 1], [E, 1]]]] },
-  songsOnStaff: { title: 'Músicas na partitura', text: 'Agora você vai ler o começo de músicas que já conhece. Leia nota por nota, da esquerda para a direita!', staff: [E, D, C, D, E] },
-  highNotes: { title: 'Lá em cima da pauta', text: 'A pauta continua subindo! Depois do Dó agudo vêm o Ré, o Mi, o Fá e o Sol agudos. O teclado agora ficou maior.', staff: [C5, D5, E5, F5, G5], labels: true, wide: true },
-  wholeStaff: { title: 'A pauta inteira', text: 'As cinco linhas, de baixo para cima: Mi, Sol, Si, Ré, Fá. Os quatro espaços: Fá, Lá, Dó, Mi.', staff: [E, G, B, D5, F5], labels: true },
-  jumps: { title: 'Pulando degraus', text: 'Às vezes a melodia não anda de vizinho em vizinho: ela pula! Dó, Mi, Sol é um pulo de linha em linha.', staff: [C, E, G, C5], labels: true },
-  scale: { title: 'A escada das notas', text: 'Escala é uma escada de notas! Cada degrau é a nota vizinha: Dó, Ré, Mi, Fá, Sol, Lá, Si e Dó de novo. Subindo a escada, o som fica mais agudo.', stairs: C_SCALE, sounds: [['🔊 Ouvir a escala', C_SCALE.map(n => [n, 0.75])]] },
-  scaleDown: { title: 'Descendo a escada', text: 'Descer a escada é tocar de trás para frente: Dó, Si, Lá, Sol, Fá, Mi, Ré, Dó. O som vai ficando mais grave.', stairs: [...C_SCALE].reverse(), sounds: [['🔊 Ouvir descendo', [...C_SCALE].reverse().map(n => [n, 0.75])]] },
-  halfStep: { title: 'Vizinhos colados', text: 'Quase todas as teclas brancas têm uma tecla preta no meio. Mas o Mi e o Fá são vizinhos colados, sem tecla preta! O Si e o Dó também.', keys: 'full', highlight: [E, F, B, C5] },
-  order: { art: '🪜', title: 'Em ordem!', text: 'A escada tem uma ordem certinha: Dó, Ré, Mi, Fá, Sol, Lá, Si. Vou misturar as notas e você coloca na ordem.' },
-  fiveFingers: { title: 'Cinco dedinhos', text: 'Pianistas começam com cinco notas, uma para cada dedo: Dó, Ré, Mi, Fá, Sol. O polegar fica no Dó!', stairs: [C, D, E, F, G] },
-  scaleStaff: { title: 'A escala na partitura', text: 'Na pauta a escala também é uma escada: linha, espaço, linha, espaço… cada nota um degrau acima da outra.', staff: C_SCALE, labels: true },
-  gScale: { title: 'A escala de Sol', text: 'Uma escala pode começar em outra nota! A escala de Sol vai do Sol até o Sol agudo. Para soar certinha, o Fá vira Fá sustenido: a tecla preta.', stairs: G_SCALE, wide: true, sounds: [['🔊 Ouvir a escala de Sol', G_SCALE.map(n => [n, 0.75])]] },
-  songs: { art: '🎵', title: 'Hora do show', text: 'Primeiro a gente escuta a música inteira. Depois você toca um pedacinho de cada vez. No fim, ela toda!' },
-};
 const tip = id => ex('tip', { tip: TIPS[id] });
 
 // ── Exercise builders ──────────────────────────────────────────────────────
@@ -93,7 +39,7 @@ const nameIt = (note, pool, keys) => ex('name', { note, keys, options: shuffle([
 const highLow = () => {
   const high = Math.random() < 0.5;
   return ex('ear', {
-    question: 'Esse som é grave ou agudo?',
+    question: EAR.highLow,
     seq: [[high ? pick(['C6', 'E6', 'G5']) : pick(['C3', 'E3', 'G2']), 1.5]],
     options: [{ id: 'low', art: '🐻', label: 'Grave' }, { id: 'high', art: '🐦', label: 'Agudo' }],
     answer: high ? 'high' : 'low',
@@ -111,7 +57,7 @@ const upDown = (scale = false) => {
   const up = Math.random() < 0.5;
   if (!up) notes = [...notes].reverse();
   return ex('ear', {
-    question: scale ? 'A escada subiu ou desceu?' : 'A melodia subiu ou desceu?',
+    question: scale ? EAR.upDownScale : EAR.upDown,
     seq: notes.map(n => [n, scale ? 0.6 : 1]),
     options: [{ id: 'up', art: '⬆️', label: 'Subiu' }, { id: 'down', art: '⬇️', label: 'Desceu' }],
     answer: up ? 'up' : 'down',
@@ -123,7 +69,7 @@ const sameDiff = (close = false) => {
   const far = SEVEN.filter(n => Math.abs(SEVEN.indexOf(n) - SEVEN.indexOf(a)) >= (close ? 1 : 3));
   const b = same ? a : pick(far.length ? far : SEVEN.filter(n => n !== a));
   return ex('ear', {
-    question: 'As duas notas são iguais ou diferentes?',
+    question: EAR.sameDiff,
     seq: [[a, 1], ['rest', 0.5], [b, 1]],
     options: [{ id: 'same', art: '🟰', label: 'Iguais' }, { id: 'diff', art: '↔️', label: 'Diferentes' }],
     answer: same ? 'same' : 'diff',
@@ -144,11 +90,6 @@ const echo = (length, { show = true, keys = 'full', pool = [C, D, E] } = {}) => 
 // Four-beat rhythms. 1 = tá, 2 = tá-a, 0.5 + 0.5 = ti-ti.
 const QUARTERS = [[1, 1, 1, 1], [2, 2], [1, 1, 2], [2, 1, 1], [1, 2, 1]];
 const EIGHTHS = [[0.5, 0.5, 1, 1, 1], [1, 0.5, 0.5, 1, 1], [1, 1, 0.5, 0.5, 1], [1, 1, 1, 0.5, 0.5], [0.5, 0.5, 1, 2]];
-const RHYTHM_LEARN = {
-  1: { title: 'Semínima: tá', text: 'Esta nota dura um tempo. Quando ela aparece, a gente fala "tá"!', pattern: [1, 1, 1, 1] },
-  2: { title: 'Mínima: tá-a', text: 'Esta nota é vazia por dentro e dura dois tempos. A gente fala "tá-a" e segura.', pattern: [2, 2] },
-  0.5: { title: 'Colcheias: ti-ti', text: 'Duas colcheias juntinhas cabem num tempo só. São rapidinhas: "ti-ti"!', pattern: [0.5, 0.5, 0.5, 0.5, 1, 1] },
-};
 const rhythmLearn = value => ex('rhythm-learn', { ...RHYTHM_LEARN[value], bpm: 66 });
 const rhythmChoose = pool => {
   const answer = pick(pool);
@@ -258,7 +199,7 @@ export const UNITS = [
     lessons: [
       { id: 'sc1-1', title: 'A escada das notas', icon: '🪜', build: () => [tip('scale'), scalePlay(C_SCALE), scalePlay(C_SCALE), ...times(3, () => scaleMissing(C_SCALE)), ...times(3, () => scaleNeighbor(C_SCALE, 'next'))] },
       { id: 'sc1-2', title: 'Descendo a escada', icon: '🛝', build: () => [tip('scaleDown'), scalePlay([...C_SCALE].reverse()), scalePlay([...C_SCALE].reverse()), ...shuffle([...times(2, () => scaleMissing([...C_SCALE].reverse())), ...times(3, () => scaleNeighbor(C_SCALE, 'before')), upDown(true), upDown(true)])] },
-      { id: 'sc1-3', title: 'Cinco dedinhos', icon: '🖐️', build: () => [tip('fiveFingers'), scalePlay(FIVE), scalePlay([...FIVE].reverse()), ...shuffle(FIVE_BITS).slice(0, 5).map(notes => scalePlay(notes, { label: 'Toque os cinco dedinhos' })), scaleMissing(FIVE)] },
+      { id: 'sc1-3', title: 'Cinco dedinhos', icon: '🖐️', build: () => [tip('fiveFingers'), scalePlay(FIVE), scalePlay([...FIVE].reverse()), ...shuffle(FIVE_BITS).slice(0, 5).map(notes => scalePlay(notes, { label: LINES.fiveFingers })), scaleMissing(FIVE)] },
       { id: 'sc1-4', title: 'Vizinhos colados', icon: '🤝', build: () => [tip('halfStep'), halfStep([E, F]), halfStep([C, D]), halfStep([B, C5]), ...shuffle(PAIRS).map(p => halfStep(p))] },
       { id: 'sc1-5', title: 'Em ordem!', icon: '🔢', build: () => [tip('order'), orderIt(3), orderIt(3), orderIt(4), orderIt(4), orderIt(5), orderIt(3, 'down'), orderIt(4, 'down'), orderIt(5)] },
       { id: 'sc1-6', title: 'Escala sem ajuda', icon: '🦸', build: () => [scalePlay(C_SCALE, { guide: false }), scalePlay([...C_SCALE].reverse(), { guide: false }), scalePlay(C_SCALE, { guide: false, keys: 'emoji' }), ...shuffle([scaleMissing(C_SCALE, 4), scaleMissing(C_SCALE, 4), scaleNeighbor(C_SCALE, 'next'), scaleNeighbor(C_SCALE, 'before'), orderIt(5)]), scalePlay(C_SCALE, { guide: false, keys: 'plain' })] },
@@ -342,7 +283,7 @@ export const PRACTICE = {
   scales: {
     id: 'practice-scales', title: 'Treino de escalas', icon: '🪜', practice: true,
     unit: { id: 'practice', title: 'Treino', color: '#ff6fa3' },
-    build: () => shuffle([scalePlay(C_SCALE, { guide: false }), scalePlay([...C_SCALE].reverse(), { guide: false }), scalePlay(pick(FIVE_BITS), { label: 'Toque os cinco dedinhos' }), scaleMissing(C_SCALE, 4), scaleMissing([...C_SCALE].reverse(), 4), scaleNeighbor(C_SCALE, 'next'), scaleNeighbor(C_SCALE, 'before'), halfStep(), orderIt(4), orderIt(5, pick(['up', 'down'])), scalePlay(C_SCALE, { view: 'staff', guide: false })]),
+    build: () => shuffle([scalePlay(C_SCALE, { guide: false }), scalePlay([...C_SCALE].reverse(), { guide: false }), scalePlay(pick(FIVE_BITS), { label: LINES.fiveFingers }), scaleMissing(C_SCALE, 4), scaleMissing([...C_SCALE].reverse(), 4), scaleNeighbor(C_SCALE, 'next'), scaleNeighbor(C_SCALE, 'before'), halfStep(), orderIt(4), orderIt(5, pick(['up', 'down'])), scalePlay(C_SCALE, { view: 'staff', guide: false })]),
   },
 };
 

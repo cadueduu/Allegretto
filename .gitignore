@@ -7,3 +7,4 @@ dist-ssr
 .idea
 .claude
 .lc
+scripts/nina-voice/build
