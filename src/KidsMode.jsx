@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Confetti, DEFAULT_VOICE, KIDS_SONGS, KID_KEYS, KidsKeyboard, BubbleTrack, Mascot, NINA_HELLO, NOTE_INFO, Star, StarRow,
-  VOICE_STYLES, WHITE_PCS, hush, kidKeyFor, noteInfo, pitchClass, portugueseVoices, speak,
+  VOICE_STYLES, WHITE_PCS, kidKeyFor, noteInfo, pitchClass, portugueseVoices, speak,
 } from './kids/kidsShared.jsx';
 import KidsLesson from './kids/KidsLesson.jsx';
 import { PRACTICE } from './kids/curriculum.js';
-import { LINES } from './kids/texts.js';
 import KidsPath, { currentStreak, dayKey } from './kids/KidsPath.jsx';
 import './kids-mode.css';
 import './kids/kids-path.css';
@@ -49,11 +48,12 @@ function Explore({ pressRef, say, onComplete }) {
   const foundRef = useRef(found);
   useEffect(() => {
     pressRef.current = name => {
+      const info = noteInfo(name);
       setLast({ name, at: performance.now() });
       const pc = pitchClass(name);
       if (!NOTE_INFO[pc] || foundRef.current.has(pc)) return;
       // The voice only names a note the first time it's found; after that the card on screen is enough.
-      say(LINES.discovered(pc));
+      say(`${info.name}, de ${info.word}!`);
       foundRef.current = new Set(foundRef.current).add(pc);
       setFound(foundRef.current);
       if (foundRef.current.size === WHITE_PCS.length) setTimeout(onComplete, 700);
@@ -95,7 +95,7 @@ function FindGame({ pressRef, say, onTargets, onJingle, onFinish }) {
   const info = NOTE_INFO[goal];
 
   useEffect(() => () => clearTimeout(timer.current), []);
-  useEffect(() => { say(LINES.whereIs(goal)); }, [goal, round, say]);
+  useEffect(() => { say(`Cadê o ${NOTE_INFO[goal].name}?`); }, [goal, round, say]);
   // After two wrong tries the right key starts to glow, so nobody gets stuck.
   useEffect(() => { onTargets(state === 'ask' && tries >= 2 ? goal : null); }, [state, tries, goal, onTargets]);
 
@@ -217,7 +217,7 @@ function SongPlay({ song, pressRef, onTargets, onDemo, onStopDemo, demoBeat, dem
 /** For the grown-ups: switch Nina's voice on or off, pick how she sounds and which of the browser's voices she uses. */
 function VoicePanel({ voice, onChange, onClose }) {
   const [voices, setVoices] = useState(portugueseVoices);
-  const supported = typeof window !== 'undefined' && 'speechSynthesis' in window; // browser voices (Nina's own needs none)
+  const supported = typeof window !== 'undefined' && 'speechSynthesis' in window;
   // Chrome fills in its voice list a moment after the page loads.
   useEffect(() => {
     if (!supported) return undefined;
@@ -235,7 +235,7 @@ function VoicePanel({ voice, onChange, onClose }) {
     onChange(next);
     // Every change says hello in the new voice, so the grown-up hears the difference right away.
     if (next.on) speak(NINA_HELLO, next);
-    else hush();
+    else window.speechSynthesis?.cancel();
   };
   return (
     <>
@@ -259,16 +259,16 @@ function VoicePanel({ voice, onChange, onClose }) {
             ))}
           </div>
           <label className="kids-voice__label" htmlFor="kids-voice-select">Qual voz</label>
-          <select id="kids-voice-select" value={voice.voiceURI} disabled={!voice.on} onChange={e => change({ voiceURI: e.target.value })}>
-            <option value="">Nina, voz de criança</option>
-            {voices.length > 0 && (
-              <optgroup label="Vozes do navegador (de adulto)">
-                {voices.map(v => <option key={v.voiceURI} value={v.voiceURI}>{v.name.replace(/^Microsoft /, '').replace(/ - Portuguese \(Brazil\)/i, '')}</option>)}
-              </optgroup>
-            )}
-          </select>
+          {voices.length ? (
+            <select id="kids-voice-select" value={voice.voiceURI} disabled={!voice.on} onChange={e => change({ voiceURI: e.target.value })}>
+              <option value="">Automática (a mais infantil)</option>
+              {voices.map(v => <option key={v.voiceURI} value={v.voiceURI}>{v.name.replace(/^Microsoft /, '').replace(/ - Portuguese \(Brazil\)/i, '')}</option>)}
+            </select>
+          ) : (
+            <p className="kids-voice__note">{supported ? 'Procurando vozes em português…' : 'Este navegador não tem voz.'} No Chrome ou no Edge a Nina fala melhor.</p>
+          )}
           <button type="button" className="kids-btn kids-btn--listen kids-voice__test" disabled={!voice.on} onClick={() => speak(NINA_HELLO, voice)}>▶ Ouvir a Nina</button>
-          <p className="kids-voice__note">A voz da Nina é gravada com jeito de criança. As vozes do navegador também funcionam, mas soam como adulto.</p>
+          <p className="kids-voice__note">Cada voz soa de um jeito; teste e escolha a que a criança mais gostar.</p>
         </div>
       </div>
     </>
@@ -302,7 +302,7 @@ export default function KidsMode({ activeNotes, pressHookRef, pointerHandlers, o
     const voiceSettings = { style: voice.style, voiceURI: voice.voiceURI };
     try { localStorage.setItem(STORE_KEY, JSON.stringify({ voice: voice.on, voiceSettings, stars, path })); } catch { /* private mode */ }
   }, [voice, stars, path]);
-  useEffect(() => () => hush(), []);
+  useEffect(() => () => { try { window.speechSynthesis?.cancel(); } catch { /* ignore */ } }, []);
   // The page behind shouldn't scroll under small fingers.
   useEffect(() => {
     const root = document.documentElement;
@@ -353,7 +353,7 @@ export default function KidsMode({ activeNotes, pressHookRef, pointerHandlers, o
     award(id, n);
     setTargetNote(null);
     onJingle('fanfare');
-    speak(LINES.bravo(n === 3), voiceRef.current);
+    speak(n === 3 ? 'Parabéns! Três estrelas!' : 'Parabéns!', voiceRef.current);
     setCelebration({ title, text, stars: n, again: () => go(screen), back: () => go(backTo), backLabel });
   };
   const startLesson = (picked, unit) => {

@@ -1,9 +1,18 @@
 import { useMemo } from 'react';
-import { BLACK_NAMES, LINES, NOTE_INFO, lineId, ttsText } from './texts.js';
-import { VOICE_CLIPS } from './voiceClips.js';
 
-export { NOTE_INFO };
-
+// Each note gets a color (like the colored bells kids learn with), a picture and a word that starts
+// with its name, so a child who can't read yet can still find "Mi" as "the yellow cat key".
+export const NOTE_INFO = {
+  C: { name: 'Dó',  emoji: '🍬', word: 'doce', color: '#ff5d5d' },
+  D: { name: 'Ré',  emoji: '👑', word: 'rei',  color: '#ff9a3c' },
+  E: { name: 'Mi',  emoji: '🐱', word: 'miau', color: '#ffc928' },
+  F: { name: 'Fá',  emoji: '🧚', word: 'fada', color: '#43c96b' },
+  G: { name: 'Sol', emoji: '☀️', word: 'sol',  color: '#22b8d6' },
+  A: { name: 'Lá',  emoji: '🧶', word: 'lã',   color: '#5b7cfa' },
+  B: { name: 'Si',  emoji: '🔔', word: 'sino', color: '#b065f0' },
+};
+// Black keys by their everyday names (Si♭ is the one "Parabéns" uses).
+const BLACK_NAMES = { 'C#': 'Dó♯', 'D#': 'Mi♭', 'F#': 'Fá♯', 'G#': 'Sol♯', 'A#': 'Si♭' };
 export const WHITE_PCS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
 
 // One octave plus the top Dó: big keys, and every kids' song fits in it. Reading the whole treble staff
@@ -89,16 +98,15 @@ export const KIDS_SONGS = [
   },
 ];
 
-// How Nina sounds. Her own voice is a set of recordings made to sound like a child (scripts/nina-voice);
-// clipRate plays them a bit faster/higher or slower/lower. pitch and rate apply when a browser voice is
-// picked instead — those always keep a grown-up's timbre, however high they go.
+// How Nina sounds. A raised pitch is what turns a synthetic voice into a cartoon-like child's voice;
+// "Calma" is for kids (or grown-ups) who find the squeaky one too much.
 export const VOICE_STYLES = {
-  fofinha: { label: 'Fofinha', icon: '🧸', clipRate: 1, pitch: 1.75, rate: 1.02 },
-  animada: { label: 'Animada', icon: '🎈', clipRate: 1.1, pitch: 1.45, rate: 1.12 },
-  calma: { label: 'Calma', icon: '🌙', clipRate: 0.88, pitch: 1.15, rate: 0.9 },
+  fofinha: { label: 'Fofinha', icon: '🧸', pitch: 1.75, rate: 1.02 },
+  animada: { label: 'Animada', icon: '🎈', pitch: 1.45, rate: 1.12 },
+  calma: { label: 'Calma', icon: '🌙', pitch: 1.15, rate: 0.9 },
 };
 export const DEFAULT_VOICE = { on: true, style: 'fofinha', voiceURI: '' };
-export const NINA_HELLO = LINES.hello;
+export const NINA_HELLO = 'Oi! Eu sou a Nina, a notinha! Vamos tocar juntos?';
 
 /** The browser's Portuguese voices, Brazilian ones first. */
 export function portugueseVoices() {
@@ -135,77 +143,19 @@ function pickVoice(synth, style, uri) {
   return best;
 }
 
-// The recording being played, so a new line can cut it off (and let whoever waited on it go on), and the
-// line being said either way, so an exercise that goes away can silence only its own words.
-let playing = null;
-let speaking = '';
-function stopClip() {
-  if (!playing) return;
-  const { audio, finish } = playing;
-  playing = null;
-  audio.pause();
-  finish(true);
-}
-/** Plays Nina's recording of a line; resolves true when it ended, false if it couldn't play. */
-function playClip(text, style) {
-  return new Promise(resolve => {
-    stopClip();
-    const audio = new Audio(`${import.meta.env.BASE_URL}voice/${lineId(text)}.mp3`);
-    // Playing faster must also raise the voice (that's the childlike part), not keep its pitch.
-    audio.preservesPitch = false;
-    audio.mozPreservesPitch = false;
-    audio.webkitPreservesPitch = false;
-    audio.playbackRate = style.clipRate;
-    let settled = false;
-    const finish = ok => {
-      if (settled) return;
-      settled = true;
-      if (playing?.audio === audio) playing = null;
-      resolve(ok);
-    };
-    playing = { audio, finish };
-    speaking = text;
-    audio.onended = () => finish(true);
-    audio.onerror = () => finish(false);
-    audio.play().catch(() => finish(false));
-  });
-}
-
 /**
  * Speaks in Brazilian Portuguese with Nina's voice; resolves when done (or right away when the voice is
- * off). settings: { on, style, voiceURI } (a plain true/false also works). With no browser voice chosen,
- * lines that have a recording play it; anything else (or a failed recording) uses the browser's voice.
+ * off). settings: { on, style, voiceURI } (a plain true/false also works).
  */
 export function speak(text, settings) {
   const voice = settings && typeof settings === 'object' ? settings : { ...DEFAULT_VOICE, on: Boolean(settings) };
-  if (!voice.on || typeof window === 'undefined') return Promise.resolve();
-  speaking = text;
-  const style = VOICE_STYLES[voice.style] || VOICE_STYLES.fofinha;
-  if (!voice.voiceURI && VOICE_CLIPS.has(lineId(text))) {
-    window.speechSynthesis?.cancel();
-    return playClip(text, style).then(ok => (ok ? undefined : speakWithBrowser(text, voice)));
-  }
-  return speakWithBrowser(text, voice);
-}
-
-/** Silences Nina; with a line, only if that line is the one being said. */
-export function hush(text) {
-  if (text && text !== speaking) return;
-  speaking = '';
-  stopClip();
-  if (typeof window !== 'undefined') window.speechSynthesis?.cancel();
-}
-
-function speakWithBrowser(text, voice) {
-  stopClip();
-  speaking = text;
   return new Promise(resolve => {
-    if (!('speechSynthesis' in window)) { resolve(); return; }
+    if (!voice.on || typeof window === 'undefined' || !('speechSynthesis' in window)) { resolve(); return; }
     try {
       const synth = window.speechSynthesis;
       synth.cancel(); // only the latest thing matters when little hands play fast
       const style = VOICE_STYLES[voice.style] || VOICE_STYLES.fofinha;
-      const utterance = new SpeechSynthesisUtterance(ttsText(text));
+      const utterance = new SpeechSynthesisUtterance(text.replace(/♯/g, ' sustenido').replace(/♭/g, ' bemol'));
       utterance.lang = 'pt-BR';
       utterance.rate = style.rate;
       utterance.pitch = style.pitch;

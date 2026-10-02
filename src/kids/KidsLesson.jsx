@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BubbleTrack, Confetti, KidsKeyboard, Mascot, MiniStaff, RhythmView, ScaleStairs, StarRow,
-  hush, keysNamed, kidKeyFor, noteInfo, noteMidi, pitchClass, samePitch, staffStep,
+  keysNamed, kidKeyFor, noteInfo, noteMidi, pitchClass, samePitch, staffStep,
 } from './kidsShared.jsx';
 import { KEY_TIPS, STAFF_TIPS, songById } from './curriculum.js';
-import { LINES, staffLabel } from './texts.js';
 import './kids-lesson.css';
 
 const PRAISE = ['Muito bem!', 'Isso aí!', 'Arrasou!', 'Mandou bem!', 'Perfeito!', 'Uau, acertou!'];
@@ -12,7 +11,7 @@ const praise = () => PRAISE[Math.floor(Math.random() * PRAISE.length)];
 const GREEN = '#3cbf63';
 const RED = '#ff5d5d';
 // "Dó agudo" for the notes from the Dó in the third space upwards, so both Dós can be told apart.
-const staffName = staffLabel;
+const staffName = note => `${noteInfo(note).name}${noteMidi(note) >= 72 ? ' agudo' : ''}`;
 const matches = (name, target, exact) => (exact ? name === target : samePitch(name, target));
 const optionLabel = value => noteInfo(/\d$/.test(value) ? value : `${value}4`).name;
 // 'up', 'down' or 'mixed' (five-finger patterns that go up and back down).
@@ -35,15 +34,12 @@ function Prompt({ children, mood = 'happy', speech, say }) {
 }
 const NoteWord = ({ note, children }) => <span className="lx-note" style={{ '--c': noteInfo(note).color }}>{children ?? noteInfo(note).name}</span>;
 
-/**
- * Says something, then runs `then` unless the exercise went away meanwhile (also covers StrictMode's
- * double mount). Leaving the exercise (say, "Entendi!" halfway through a tip) stops Nina mid-sentence.
- */
+/** Says something, then runs `then` unless the exercise went away meanwhile (also covers StrictMode's double mount). */
 function useIntro(say, text, then) {
   useEffect(() => {
     let alive = true;
     say(text).then(() => { if (alive) then?.(); });
-    return () => { alive = false; hush(text); };
+    return () => { alive = false; };
   }, []);
 }
 /** Runs once shortly after the exercise appears (a beat to look before the sound starts). */
@@ -93,7 +89,7 @@ function TipEx({ ex, answer, setKb, sound, say }) {
   useEffect(() => {
     setKb(tip.keys || tip.wide ? { mode: tip.keys || 'full', wide: tip.wide, targets: tip.highlight, pointer: false } : null);
   }, []);
-  useIntro(say, LINES.tip(tip));
+  useIntro(say, `${tip.title}. ${tip.text}`);
   return (
     <div className="lx-body">
       <div className="lx-tip">
@@ -116,7 +112,7 @@ function TipEx({ ex, answer, setKb, sound, say }) {
 function IntroEx({ ex, answer, setKb, pressRef, sound, say }) {
   const info = noteInfo(ex.note);
   useEffect(() => { setKb({ mode: 'full', targets: [ex.note] }); }, []);
-  useIntro(say, LINES.introNote(pitchClass(ex.note)));
+  useIntro(say, `Este é o ${info.name}, de ${info.word}!`);
   useEffect(() => {
     pressRef.current = name => { if (samePitch(name, ex.note)) answer(true, { title: `Isso! Esse é o ${info.name}!` }); };
   });
@@ -145,7 +141,7 @@ function FindEx({ ex, answer, setKb, pressRef, say }) {
   });
   return (
     <div className="lx-body">
-      <Prompt say={say} speech={LINES.touch(info.name)}>Toque o <NoteWord note={ex.note} /></Prompt>
+      <Prompt say={say} speech={`Toque o ${info.name}`}>Toque o <NoteWord note={ex.note} /></Prompt>
       {ex.hint && <p className="lx-hint">💡 {tip}</p>}
     </div>
   );
@@ -164,7 +160,7 @@ function NameEx({ ex, answer, locked, setKb, sound, say }) {
   };
   return (
     <div className="lx-body">
-      <Prompt say={say} speech={LINES.whichNote}>Que nota é esta? <button type="button" className="lx-speaker lx-speaker--small" onClick={() => sound.note(ex.note)} aria-label="Ouvir a nota">🎵</button></Prompt>
+      <Prompt say={say} speech="Que nota é esta?">Que nota é esta? <button type="button" className="lx-speaker lx-speaker--small" onClick={() => sound.note(ex.note)} aria-label="Ouvir a nota">🎵</button></Prompt>
       <p className="lx-hint">Olhe a tecla com <b>?</b> no piano</p>
       <OptionButtons options={ex.options} correct={correct} picked={picked} locked={locked} onPick={pick} />
     </div>
@@ -243,7 +239,7 @@ function EchoEx({ ex, answer, setKb, pressRef, sound, say }) {
   const listening = phase === 'listen';
   return (
     <div className="lx-body">
-      <Prompt say={say} speech={listening ? LINES.echoListen : LINES.echoPlay} mood={misses && listening ? 'oops' : 'happy'}>
+      <Prompt say={say} speech={listening ? 'Olhe e escute' : 'Agora você! Toque igual.'} mood={misses && listening ? 'oops' : 'happy'}>
         {listening ? (misses ? 'Quase! Olhe de novo 👀' : `Olhe e escute ${ex.show ? '👀' : ''}👂`) : 'Agora você! Toque igual 🦜'}
       </Prompt>
       <div className="lx-dots" aria-label={`${step} de ${count}`}>
@@ -301,10 +297,10 @@ function RhythmChooseEx({ ex, answer, locked, setKb, sound, sayOnce }) {
   const cards = useRef([]);
   const play = () => sound.seq(ex.options[ex.answer].map(d => ['C5', d, 0.75]), ex.bpm);
   useEffect(() => { setKb(null); }, []);
-  useIntro(sayOnce, LINES.rhythmWhich, play);
+  useIntro(sayOnce, 'Qual ritmo você ouviu?', play);
   return (
     <div className="lx-body">
-      <Prompt say={sayOnce} speech={LINES.rhythmWhich}>Qual ritmo você ouviu?</Prompt>
+      <Prompt say={sayOnce} speech="Qual ritmo você ouviu?">Qual ritmo você ouviu?</Prompt>
       <button type="button" className="lx-listen" onClick={play}><span aria-hidden="true">🔊</span> Ouvir de novo</button>
       <div className="lx-rhythm-options">
         {ex.options.map((pattern, i) => {
@@ -403,7 +399,7 @@ function RhythmTapEx({ ex, answer, setKb, pressRef, sound, say }) {
   const beats = Math.ceil(length);
   return (
     <div className="lx-body">
-      <Prompt say={say} speech={LINES.drum(ex.guide)}>
+      <Prompt say={say} speech={ex.guide ? 'Toque o tambor junto com o som' : 'Toque o tambor no ritmo'}>
         {ex.guide ? 'Toque o tambor junto com o som!' : 'Toque o tambor no ritmo!'}
       </Prompt>
       <div className="lx-rhythmbox"><RhythmView pattern={ex.pattern} active={active} marks={marks} /></div>
@@ -463,7 +459,7 @@ function StaffPlayEx({ ex, answer, setKb, pressRef, say }) {
   });
   return (
     <div className="lx-body">
-      <Prompt say={say} speech={LINES.staffPlay}>Que nota é essa? Toque no piano!</Prompt>
+      <Prompt say={say} speech="Que nota é essa? Toque no piano.">Que nota é essa? Toque no piano!</Prompt>
       <div className="lx-staffbox"><MiniStaff notes={[ex.note]} current={0} /></div>
     </div>
   );
@@ -475,7 +471,7 @@ function StaffNameEx({ ex, answer, locked, setKb, sound, say }) {
   useEffect(() => { setKb(null); }, []);
   return (
     <div className="lx-body">
-      <Prompt say={say} speech={LINES.staffName}>Qual é o nome desta nota?</Prompt>
+      <Prompt say={say} speech="Qual é o nome desta nota?">Qual é o nome desta nota?</Prompt>
       <div className="lx-staffbox"><MiniStaff notes={[ex.note]} current={0} /></div>
       <OptionButtons options={ex.options} correct={correct} picked={picked} locked={locked}
         onPick={pc => { setPicked(pc); sound.note(ex.note); answer(pc === correct, { text: `É o ${staffName(ex.note)}. ${STAFF_TIPS[ex.note]}`, okText: STAFF_TIPS[ex.note] }); }} />
@@ -501,7 +497,7 @@ function StaffSeqEx({ ex, answer, setKb, pressRef, say }) {
   });
   return (
     <div className="lx-body">
-      <Prompt say={say} speech={LINES.staffSeq}>
+      <Prompt say={say} speech="Leia e toque as notas, uma por uma.">
         {ex.title ? <>Leia e toque: <b>{ex.title}</b> 🎶</> : 'Leia e toque as notas, uma por uma 👉'}
       </Prompt>
       <div className="lx-staffbox lx-staffbox--wide"><MiniStaff notes={ex.notes} current={step} passed={step} /></div>
@@ -530,7 +526,7 @@ function StaffLinesEx({ ex, answer, locked, setKb, say }) {
   const why = onLine ? 'Está numa linha: a linha passa no meio da bolinha.' : 'Está num espaço: a bolinha fica entre duas linhas.';
   return (
     <div className="lx-body">
-      <Prompt say={say} speech={LINES.staffLines}>A nota está numa <b>linha</b> ou num <b>espaço</b>?</Prompt>
+      <Prompt say={say} speech="A nota está numa linha ou num espaço?">A nota está numa <b>linha</b> ou num <b>espaço</b>?</Prompt>
       <div className="lx-staffbox"><MiniStaff notes={[ex.note]} current={0} /></div>
       <BigChoices options={[{ id: 'line', art: <LineIcon />, label: 'Na linha' }, { id: 'space', art: <SpaceIcon />, label: 'No espaço' }]}
         correct={onLine ? 'line' : 'space'} picked={picked} locked={locked}
@@ -555,7 +551,7 @@ function StaffCompareEx({ ex, answer, locked, setKb, sound, say }) {
   };
   return (
     <div className="lx-body">
-      <Prompt say={say} speech={LINES.compare(ex.ask)}>Qual nota é mais <b>{word}</b>? {ex.ask === 'high' ? '🐦' : '🐻'}</Prompt>
+      <Prompt say={say} speech={`Qual nota é mais ${word}?`}>Qual nota é mais <b>{word}</b>? {ex.ask === 'high' ? '🐦' : '🐻'}</Prompt>
       <div className="lx-staffbox"><MiniStaff notes={[a, b]} tint={tint} /></div>
       <div className="lx-options">
         {['⬅️ A primeira', 'A segunda ➡️'].map((label, i) => {
@@ -573,7 +569,7 @@ function StaffFindEx({ ex, answer, locked, setKb, sound, say }) {
   useEffect(() => { setKb(null); }, []);
   return (
     <div className="lx-body">
-      <Prompt say={say} speech={LINES.where(ex.note)}>Onde mora o <NoteWord note={ex.note}>{staffName(ex.note)}</NoteWord>?</Prompt>
+      <Prompt say={say} speech={`Onde mora o ${staffName(ex.note)}?`}>Onde mora o <NoteWord note={ex.note}>{staffName(ex.note)}</NoteWord>?</Prompt>
       <div className="lx-staff-options">
         {ex.options.map((note, i) => {
           const state = picked == null ? '' : i === ex.answer ? ' is-right' : i === picked ? ' is-wrong' : '';
@@ -612,7 +608,7 @@ function ScalePlayEx({ ex, answer, setKb, pressRef, say }) {
       if (at + 1 === count) answer(true, { title: slips.current === 0 ? clean : 'Você chegou ao fim!' });
     };
   });
-  const label = ex.label || LINES.climb(dir, ex.guide);
+  const label = ex.label || `${dir === 'down' ? 'Desça' : 'Suba'} a escada${ex.guide ? '' : ' sozinho'}`;
   return (
     <div className="lx-body">
       <Prompt say={say} speech={label}>{label} {{ up: '⬆️', down: '⬇️', mixed: '🖐️' }[dir]}</Prompt>
@@ -638,7 +634,7 @@ function ScaleMissingEx({ ex, answer, locked, setKb, sound, say }) {
   };
   return (
     <div className="lx-body">
-      <Prompt say={say} speech={LINES.missing}>Qual nota está faltando na escada?</Prompt>
+      <Prompt say={say} speech="Qual nota está faltando na escada?">Qual nota está faltando na escada?</Prompt>
       <ScaleStairs notes={ex.notes} reached={ex.notes.length} missing={picked == null ? ex.missing : -1} climber={false} />
       <OptionButtons options={ex.options} correct={correct} picked={picked} locked={locked} onPick={pick} />
     </div>
@@ -652,7 +648,7 @@ function ScaleNeighborEx({ ex, answer, locked, setKb, sound, say }) {
   const correct = `${pitchClass(target)}4`;
   const [picked, setPicked] = useState(null);
   useEffect(() => { setKb(null); }, []);
-  const question = LINES.neighbor(next, noteInfo(from).name);
+  const question = `Na escada, qual nota vem ${next ? 'depois' : 'antes'} do ${noteInfo(from).name}?`;
   const pair = next ? [from, target] : [target, from];
   return (
     <div className="lx-body">
@@ -678,7 +674,7 @@ function HalfStepEx({ ex, answer, locked, setKb, say }) {
   const why = glued ? `Não tem! O ${names} são vizinhos colados.` : `Tem sim: entre o ${names} mora uma tecla preta.`;
   return (
     <div className="lx-body">
-      <Prompt say={say} speech={LINES.halfStep(noteInfo(a).name, noteInfo(b).name)}>Entre o <NoteWord note={a} /> e o <NoteWord note={b} /> tem tecla preta?</Prompt>
+      <Prompt say={say} speech={`Entre o ${names} tem tecla preta?`}>Entre o <NoteWord note={a} /> e o <NoteWord note={b} /> tem tecla preta?</Prompt>
       <p className="lx-hint">Olhe as duas teclas com <b>?</b> no piano</p>
       <BigChoices options={[{ id: 'yes', art: '⬛', label: 'Tem' }, { id: 'no', art: '🤝', label: 'Não tem' }]}
         correct={glued ? 'no' : 'yes'} picked={picked} locked={locked}
@@ -712,7 +708,7 @@ function OrderEx({ ex, answer, locked, setKb, sound, say }) {
     setShake({ i, n: mistakes.current });
     if (mistakes.current >= 2) answer(false, { text: `A ordem certa é: ${ex.notes.map(n => noteInfo(n).name).join(', ')}.` });
   };
-  const text = LINES.order(up);
+  const text = `Toque as notas em ordem, ${up ? 'subindo' : 'descendo'} a escada`;
   return (
     <div className="lx-body">
       <Prompt say={say} speech={text}>{text} {up ? '⬆️' : '⬇️'}</Prompt>
@@ -849,7 +845,7 @@ export default function KidsLesson({ lesson, unit, active, sparks, pointerHandle
       const xp = 10 + (mistakes === 0 ? 5 : 0) + (lesson.review ? 5 : 0);
       setSummary({ stars, xp, accuracy: Math.round((total / (total + mistakes)) * 100) });
       sound.jingle('fanfare');
-      say(LINES.lessonDone);
+      say('Lição completa!');
       return;
     }
     posRef.current = next;
