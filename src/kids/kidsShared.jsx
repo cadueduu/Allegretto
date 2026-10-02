@@ -98,41 +98,74 @@ export const KIDS_SONGS = [
   },
 ];
 
-// The browser's own voices: Edge and Chrome ship natural-sounding Brazilian ones ("Francisca Online
-// (Natural)", "Google português do Brasil"); robotic system voices are only the fallback.
-function pickVoice(synth) {
+// How Nina sounds. A raised pitch is what turns a synthetic voice into a cartoon-like child's voice;
+// "Calma" is for kids (or grown-ups) who find the squeaky one too much.
+export const VOICE_STYLES = {
+  fofinha: { label: 'Fofinha', icon: '🧸', pitch: 1.75, rate: 1.02 },
+  animada: { label: 'Animada', icon: '🎈', pitch: 1.45, rate: 1.12 },
+  calma: { label: 'Calma', icon: '🌙', pitch: 1.15, rate: 0.9 },
+};
+export const DEFAULT_VOICE = { on: true, style: 'fofinha', voiceURI: '' };
+export const NINA_HELLO = 'Oi! Eu sou a Nina, a notinha! Vamos tocar juntos?';
+
+/** The browser's Portuguese voices, Brazilian ones first. */
+export function portugueseVoices() {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return [];
+  const isBr = v => /pt[-_]br/i.test(v.lang || '');
+  return window.speechSynthesis.getVoices()
+    .filter(v => /^pt/i.test(v.lang || ''))
+    .sort((a, b) => Number(isBr(b)) - Number(isBr(a)) || a.name.localeCompare(b.name));
+}
+
+// With no voice chosen by hand: a Brazilian female voice, which goes up to a child's pitch more
+// naturally than a male one. Google's and the computer's own voices follow the pitch reliably, so the
+// childlike styles try them first; "Calma" prefers the smoother online "Natural" voices.
+function pickVoice(synth, style, uri) {
+  const voices = synth.getVoices();
+  if (uri) {
+    const chosen = voices.find(v => v.voiceURI === uri);
+    if (chosen) return chosen;
+  }
+  const childlike = style !== 'calma';
   const score = v => {
     const lang = (v.lang || '').toLowerCase().replace('_', '-');
     if (!lang.startsWith('pt')) return -1;
     let points = lang === 'pt-br' ? 10 : 2;
-    if (/natural|neural|online/i.test(v.name)) points += 6;
-    if (/google/i.test(v.name)) points += 4;
-    if (/francisca|thalita|maria|luciana/i.test(v.name)) points += 1; // softer voices read to kids more gently
+    const online = /natural|neural|online/i.test(v.name);
+    if (/google/i.test(v.name)) points += childlike ? 6 : 3;
+    if (online) points += childlike ? 2 : 6;
+    if (/francisca|thalita|maria|luciana|vit[oó]ria|leila|yara|camila|helo[ií]sa|manuela|brenda|elza|giovanna/i.test(v.name)) points += 4;
+    if (/ant[oô]nio|daniel|ricardo|donato|f[aá]bio|humberto|j[uú]lio|nicolau|val[eé]rio|duarte/i.test(v.name)) points -= 5;
     return points;
   };
   let best = null;
-  for (const v of synth.getVoices()) if (score(v) >= 0 && (!best || score(v) > score(best))) best = v;
+  for (const v of voices) if (score(v) >= 0 && (!best || score(v) > score(best))) best = v;
   return best;
 }
 
-/** Speaks in Brazilian Portuguese; resolves when done (or right away when the voice is off). */
-export function speak(text, enabled) {
+/**
+ * Speaks in Brazilian Portuguese with Nina's voice; resolves when done (or right away when the voice is
+ * off). settings: { on, style, voiceURI } (a plain true/false also works).
+ */
+export function speak(text, settings) {
+  const voice = settings && typeof settings === 'object' ? settings : { ...DEFAULT_VOICE, on: Boolean(settings) };
   return new Promise(resolve => {
-    if (!enabled || typeof window === 'undefined' || !('speechSynthesis' in window)) { resolve(); return; }
+    if (!voice.on || typeof window === 'undefined' || !('speechSynthesis' in window)) { resolve(); return; }
     try {
       const synth = window.speechSynthesis;
       synth.cancel(); // only the latest thing matters when little hands play fast
+      const style = VOICE_STYLES[voice.style] || VOICE_STYLES.fofinha;
       const utterance = new SpeechSynthesisUtterance(text.replace(/♯/g, ' sustenido').replace(/♭/g, ' bemol'));
       utterance.lang = 'pt-BR';
-      utterance.rate = 0.92;
-      utterance.pitch = 1.08;
-      const voice = pickVoice(synth);
-      if (voice) utterance.voice = voice;
+      utterance.rate = style.rate;
+      utterance.pitch = style.pitch;
+      const picked = pickVoice(synth, voice.style, voice.voiceURI);
+      if (picked) utterance.voice = picked;
       utterance.onend = () => resolve();
       utterance.onerror = () => resolve();
       synth.speak(utterance);
       // Some browsers never fire onend; don't let a lesson wait on them.
-      setTimeout(resolve, 900 + text.length * 85);
+      setTimeout(resolve, (900 + text.length * 85) / style.rate);
     } catch { resolve(); }
   });
 }

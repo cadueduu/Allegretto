@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Confetti, KIDS_SONGS, KID_KEYS, KidsKeyboard, BubbleTrack, NOTE_INFO, Star, StarRow, WHITE_PCS,
-  kidKeyFor, noteInfo, pitchClass, speak,
+  Confetti, DEFAULT_VOICE, KIDS_SONGS, KID_KEYS, KidsKeyboard, BubbleTrack, Mascot, NINA_HELLO, NOTE_INFO, Star, StarRow,
+  VOICE_STYLES, WHITE_PCS, kidKeyFor, noteInfo, pitchClass, portugueseVoices, speak,
 } from './kids/kidsShared.jsx';
 import KidsLesson from './kids/KidsLesson.jsx';
 import { PRACTICE } from './kids/curriculum.js';
@@ -214,6 +214,67 @@ function SongPlay({ song, pressRef, onTargets, onDemo, onStopDemo, demoBeat, dem
   );
 }
 
+/** For the grown-ups: switch Nina's voice on or off, pick how she sounds and which of the browser's voices she uses. */
+function VoicePanel({ voice, onChange, onClose }) {
+  const [voices, setVoices] = useState(portugueseVoices);
+  const supported = typeof window !== 'undefined' && 'speechSynthesis' in window;
+  // Chrome fills in its voice list a moment after the page loads.
+  useEffect(() => {
+    if (!supported) return undefined;
+    const refresh = () => setVoices(portugueseVoices());
+    window.speechSynthesis.addEventListener('voiceschanged', refresh);
+    return () => window.speechSynthesis.removeEventListener('voiceschanged', refresh);
+  }, [supported]);
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  const change = patch => {
+    const next = { ...voice, ...patch };
+    onChange(next);
+    // Every change says hello in the new voice, so the grown-up hears the difference right away.
+    if (next.on) speak(NINA_HELLO, next);
+    else window.speechSynthesis?.cancel();
+  };
+  return (
+    <>
+      <button type="button" className="kids-voice__backdrop" aria-label="Fechar" onClick={onClose} />
+      <div className="kids-voice" role="dialog" aria-label="Voz da Nina">
+        <div className="kids-voice__head">
+          <Mascot size={48} mood={voice.on ? 'cheer' : 'happy'} />
+          <strong>Voz da Nina</strong>
+          <button type="button" className={`kids-switch${voice.on ? ' is-on' : ''}`} role="switch" aria-checked={voice.on}
+            aria-label={voice.on ? 'Desligar a voz' : 'Ligar a voz'} onClick={() => change({ on: !voice.on })}>
+            <i aria-hidden="true" />
+          </button>
+        </div>
+        <div className={`kids-voice__body${voice.on ? '' : ' is-off'}`}>
+          <span className="kids-voice__label">Jeito de falar</span>
+          <div className="kids-voice__styles" role="group" aria-label="Jeito de falar">
+            {Object.entries(VOICE_STYLES).map(([id, style]) => (
+              <button type="button" key={id} aria-pressed={voice.style === id} disabled={!voice.on} onClick={() => change({ style: id })}>
+                <span aria-hidden="true">{style.icon}</span>{style.label}
+              </button>
+            ))}
+          </div>
+          <label className="kids-voice__label" htmlFor="kids-voice-select">Qual voz</label>
+          {voices.length ? (
+            <select id="kids-voice-select" value={voice.voiceURI} disabled={!voice.on} onChange={e => change({ voiceURI: e.target.value })}>
+              <option value="">Automática (a mais infantil)</option>
+              {voices.map(v => <option key={v.voiceURI} value={v.voiceURI}>{v.name.replace(/^Microsoft /, '').replace(/ - Portuguese \(Brazil\)/i, '')}</option>)}
+            </select>
+          ) : (
+            <p className="kids-voice__note">{supported ? 'Procurando vozes em português…' : 'Este navegador não tem voz.'} No Chrome ou no Edge a Nina fala melhor.</p>
+          )}
+          <button type="button" className="kids-btn kids-btn--listen kids-voice__test" disabled={!voice.on} onClick={() => speak(NINA_HELLO, voice)}>▶ Ouvir a Nina</button>
+          <p className="kids-voice__note">Cada voz soa de um jeito; teste e escolha a que a criança mais gostar.</p>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ── Shell ──────────────────────────────────────────────────────────────────
 
 const EMPTY_PATH = { done: {}, xp: 0, streak: { count: 0, last: null }, today: { day: null, count: 0 }, unlockAll: false };
@@ -223,7 +284,11 @@ export default function KidsMode({ activeNotes, pressHookRef, pointerHandlers, o
   const [screen, setScreen] = useState('path'); // path | home | explore | find | songs | play
   const [lesson, setLesson] = useState(null);   // { lesson, unit } while a lesson runs
   const [song, setSong] = useState(null);
-  const [voice, setVoice] = useState(() => readStore().voice !== false);
+  const [voice, setVoice] = useState(() => {
+    const saved = readStore();
+    return { ...DEFAULT_VOICE, ...saved.voiceSettings, on: saved.voice !== false };
+  });
+  const [voiceOpen, setVoiceOpen] = useState(false);
   const [stars, setStars] = useState(() => readStore().stars || {});
   const [path, setPath] = useState(() => ({ ...EMPTY_PATH, ...readStore().path }));
   const [targetNote, setTargetNote] = useState(null);
@@ -234,7 +299,8 @@ export default function KidsMode({ activeNotes, pressHookRef, pointerHandlers, o
   const sparkId = useRef(0);
 
   useEffect(() => {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify({ voice, stars, path })); } catch { /* private mode */ }
+    const voiceSettings = { style: voice.style, voiceURI: voice.voiceURI };
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ voice: voice.on, voiceSettings, stars, path })); } catch { /* private mode */ }
   }, [voice, stars, path]);
   useEffect(() => () => { try { window.speechSynthesis?.cancel(); } catch { /* ignore */ } }, []);
   // The page behind shouldn't scroll under small fingers.
@@ -359,9 +425,9 @@ export default function KidsMode({ activeNotes, pressHookRef, pointerHandlers, o
           ) : (
             <span className="kids-starcount" aria-label={`${total} estrelas`}><Star on /> {total}</span>
           )}
-          <button type="button" className="kids-btn kids-btn--small kids-btn--round" aria-pressed={voice}
-            aria-label={voice ? 'Desligar a voz' : 'Ligar a voz'} title={voice ? 'Voz ligada' : 'Voz desligada'} onClick={() => setVoice(v => !v)}>
-            {voice ? '🔊' : '🔇'}
+          <button type="button" className="kids-btn kids-btn--small kids-btn--round" aria-haspopup="dialog" aria-expanded={voiceOpen}
+            aria-label="Voz da Nina" title={voice.on ? 'Voz ligada' : 'Voz desligada'} onClick={() => setVoiceOpen(o => !o)}>
+            {voice.on ? '🔊' : '🔇'}
           </button>
         </div>
       </header>
@@ -432,6 +498,8 @@ export default function KidsMode({ activeNotes, pressHookRef, pointerHandlers, o
       </main>
 
       {screen !== 'path' && <KidsKeyboard active={activeNotes} targets={targets} pointerHandlers={pointerHandlers} sparks={sparks} />}
+
+      {voiceOpen && <VoicePanel voice={voice} onChange={setVoice} onClose={() => setVoiceOpen(false)} />}
 
       {celebration && (
         <Celebration title={celebration.title} text={celebration.text} stars={celebration.stars}
